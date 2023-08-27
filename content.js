@@ -154,6 +154,7 @@ function attachKeyListener(element) {
                         //isAltHeld = false;
                         //simulateKeyPress('ArrowRight');
                         simulateKeyPress('ArrowRight',false,false,true);
+                        
                         break;
                     }
                     simulateKeyPress('ArrowRight', true);
