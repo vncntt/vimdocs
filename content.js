@@ -18,8 +18,10 @@ let modeProxy = new Proxy(modeData, {
 });
 let isShiftHeld = false;
 let isAltHeld = false;
+let isCmdHeld = false;
 let userCursor = null;
 let cursorCaret = null;
+let lastKeyPressed = null;
 function isMacOS() {
     return navigator.platform.indexOf('Mac') !== -1;
 }
@@ -148,74 +150,100 @@ function attachKeyListener(element) {
                     break;
                 case 'w':
                     //next word
-                    if(isMacOS()){
-                        //isAltHeld = true;
-                        //simulateKeyPress('ArrowRight');
-                        //isAltHeld = false;
-                        //simulateKeyPress('ArrowRight');
-                        simulateKeyPress('ArrowRight',false,false,true);
-                        
+                    if (isMacOS()) {
+                        isAltHeld = true;
+                        simulateKeyPress('ArrowRight');
+                        isAltHeld = false;
+                        simulateKeyPress('ArrowRight');
                         break;
                     }
                     simulateKeyPress('ArrowRight', true);
                     break;
                 case 'b':
                     //prev word
-                    if(isMacOS()){
+                    if (isMacOS()) {
                         isAltHeld = true;
-                        simulateKeyPress('ArrowRight');
+                        simulateKeyPress('ArrowLeft');
                         isAltHeld = false;
-                        simulateKeyPress('ArrowRight');
                         break;
                     }
                     simulateKeyPress('ArrowLeft', true);
                     break;
                 case '0':
                     //need to add if(at beginning of line) do nothing
-                    if(isMacOS()){
-                       isAltHeld = true;
-                       simulateKeyPress('ArrowUp');
-                       isAltHeld = false;
-                       break; 
+                    if (isMacOS()) {
+                        isAltHeld = true;
+                        simulateKeyPress('ArrowUp');
+                        isAltHeld = false;
+                        break;
                     }
                     simulateKeyPress('ArrowUp', true);
                     break;
                 case '$':
                     //end of line
-                    if(isMacOS()){
+                    if (isMacOS()) {
                         isAltHeld = true;
                         simulateKeyPress('ArrowDown');
                         isAltHeld = false;
-
+                        break;
                     }
                     simulateKeyPress('ArrowDown', true);
                     simulateKeyPress('ArrowLeft');
                     break;
                 case 'I':
                     //insert at beginning of line
-                    simulateKeyPress('Home');
+                    if (isMacOS()) {
+                        isAltHeld = true;
+                        simulateKeyPress('ArrowUp');
+                        isAltHeld = false;
+                        modeProxy.currentMode = MODES.INSERT;
+                        break;
+                    }
+                    //simulateKeyPress('Home');
+                    simulateKeyPress('ArrowUp', true);
                     modeProxy.currentMode = MODES.INSERT;
                     break;
                 case 'A':
                     //insert at end of line
-                    simulateKeyPress('End');
+                    if (isMacOS()) {
+                        isAltHeld = true;
+                        simulateKeyPress('ArrowDown');
+                        isAltHeld = false;
+                        modeProxy.currentMode = MODES.INSERT;
+                        break;
+                    }
+                    //simulateKeyPress('End');
+                    simulateKeyPress('ArrowDown', true);
+                    simulateKeyPress('ArrowLeft');
                     modeProxy.currentMode = MODES.INSERT;
                     break;
                 case 'g':
                     if (lastKeyPressed === 'g') {
+                        if (isMacOS()) {
+                            isCmdHeld = true;
+                            simulateKeyPress('ArrowUp');
+                            isCmdHeld = false;
+                            break;
+                        }
                         simulateKeyPress('Home', true);
+                        break;
                     } else {
                         lastKeyPressed = 'g';
                     }
                     break;
                 default:
-                    lastKeyPressed = null;
                     if (deletionPending || replacementPending) {
                         event.stopPropagation();
                         event.preventDefault();
                     }
                     break;
                 case 'G':
+                    if (isMacOS()) {
+                        isCmdHeld = true;
+                        simulateKeyPress('ArrowDown');
+                        isCmdHeld = false;
+                        break;
+                    }
                     simulateKeyPress('End', true);
                     break;
                 case 'x':
@@ -247,23 +275,40 @@ function attachKeyListener(element) {
                         deletionEvent.stopPropagation();
                         deletionEvent.preventDefault();
                         if (deletionEvent.key === 'd') {
-                            simulateKeyPress('ArrowDown', true);
-                            simulateKeyPress('ArrowLeft');
-                            isShiftHeld = true;
-                            simulateKeyPress('ArrowUp', true);
-                            simulateKeyPress('Backspace');
-                            isShiftHeld = false;
+                            if (isMacOS()) {
+                                isAltHeld = true;
+                                simulateKeyPress('ArrowDown');
+                                isShiftHeld = true;
+                                simulateKeyPress('ArrowUp');
+                                isAltHeld = false;
+                                isShiftHeld = false;
+                                simulateKeyPress('Backspace');
+                            }
+                            else {
+                                simulateKeyPress('ArrowDown', true);
+                                simulateKeyPress('ArrowLeft');
+                                isShiftHeld = true;
+                                simulateKeyPress('ArrowUp', true);
+                                simulateKeyPress('Backspace');
+                                isShiftHeld = false;
+                            }
                         }
                         else if (deletionEvent.key === 'w') {
-                            isShiftHeld = true;
-                            simulateKeyPress('ArrowRight', true);
-                            isShiftHeld = false;
-                            simulateKeyPress('Backspace');
-
+                            if (isMacOS()) {
+                                isAltHeld = true;
+                                isShiftHeld = true;
+                                simulateKeyPress('ArrowRight');
+                                isShiftHeld = false;
+                                isAltHeld = false;
+                                simulateKeyPress('Backspace');
+                            }
+                            else {
+                                isShiftHeld = true;
+                                simulateKeyPress('ArrowRight', true);
+                                isShiftHeld = false;
+                                simulateKeyPress('Backspace');
+                            }
                         }
-                        // Process the character after 'd' here.
-                        // For instance, if it's 'w', delete a word.
-                        console.log('hi');
                         insideDeletion = false;
                         element.removeEventListener('keydown', deletionListener);
                     };
@@ -280,27 +325,34 @@ function attachKeyListener(element) {
                         deletionEvent.stopPropagation();
                         deletionEvent.preventDefault();
                         if (deletionEvent.key === 'w') {
-                            isShiftHeld = true;
-                            simulateKeyPress('ArrowRight', true);
-                            isShiftHeld = false;
-                            simulateKeyPress('Backspace');
-                            modeProxy.currentMode = MODES.INSERT;
+                            if (isMacOS()) {
+                                isAltHeld = true;
+                                simulateKeyPress('ArrowRight');
+                                isAltHeld = false;
+                                simulateKeyPress('Backspace');
+                                modeProxy.currentMode = MODES.INSERT;
+                            }
+                            else {
+                                isShiftHeld = true;
+                                simulateKeyPress('ArrowRight', true);
+                                isShiftHeld = false;
+                                simulateKeyPress('Backspace');
+                                modeProxy.currentMode = MODES.INSERT;
+                            }
                         }
                         insideDeletion = false;
                         element.removeEventListener('keydown', deletionListener1);
                     };
                     element.addEventListener('keydown', deletionListener1);
                     break;
-
                 case 'v':
                     isShiftHeld = true;
                     simulateKeyPress('ArrowRight');
                     modeProxy.currentMode = MODES.VISUAL;
                     break;
                 case 'o':
-                    simulateKeyPress('ArrowDown', true);
+                    simulateKeyPress('$');
                     simulateKeyPress('Enter');
-                    simulateKeyPress('ArrowUp');
                     modeProxy.currentMode = MODES.INSERT;
                     break;
                 case 'O':
@@ -311,11 +363,17 @@ function attachKeyListener(element) {
                     modeProxy.currentMode = MODES.INSERT;
                     break;
                 case 'e':
-                    simulateKeyPress('ArrowRight', true);
+                    simulateKeyPress('w');
                     simulateKeyPress('ArrowLeft');
                     simulateKeyPress('ArrowLeft');
                     break;
                 case 'u':
+                    if (isMacOS()) {
+                        isCmdHeld = true;
+                        simulateKeyPress('z');
+                        isCmdHeld = false;
+                        break;
+                    }
                     simulateKeyPress('z', true);
                     break;
             }
@@ -342,42 +400,79 @@ function attachKeyListener(element) {
                     simulateKeyPress('ArrowRight')
                     break;
                 case 'w':
+                    //next word
+                    if (isMacOS()) {
+                        isAltHeld = true;
+                        simulateKeyPress('ArrowRight');
+                        isAltHeld = false;
+                        simulateKeyPress('ArrowRight');
+                        break;
+                    }
                     simulateKeyPress('ArrowRight', true);
                     break;
                 case 'b':
+                    //prev word
+                    if (isMacOS()) {
+                        isAltHeld = true;
+                        simulateKeyPress('ArrowLeft');
+                        isAltHeld = false;
+                        break;
+                    }
                     simulateKeyPress('ArrowLeft', true);
                     break;
                 case '0':
                     //need to add if(at beginning of line) do nothing
+                    if (isMacOS()) {
+                        isAltHeld = true;
+                        simulateKeyPress('ArrowUp');
+                        isAltHeld = false;
+                        break;
+                    }
                     simulateKeyPress('ArrowUp', true);
                     break;
                 case '$':
+                    //end of line
+                    if (isMacOS()) {
+                        isAltHeld = true;
+                        simulateKeyPress('ArrowDown');
+                        isAltHeld = false;
+                        break;
+                    }
                     simulateKeyPress('ArrowDown', true);
                     simulateKeyPress('ArrowLeft');
                     break;
                 case 'd':
                     console.log('entered visual mode d')
-                    simulateKeyPress('Backspace', false);
+                    simulateKeyPress('Backspace');
                     modeProxy.currentMode = MODES.NORMAL;
                     break;
-                case 'c':
-                    simulateKeyPress('Backspace', false);
-                    modeProxy.currentMode = MODES.INSERT;
-                    break;
+                //case 'c':
+                //        simulateKeyPress('Backspace');
+                //        modeProxy.currentMode = MODES.INSERT;
+                //        break;
                 case 'y':
-                    isShiftHeld = false;
+                    //broken rn
+                    if (isMacOS()) {
+                        isShiftHeld = false;
+                        isCmdHeld = true;
+                        simulateKeyPress('c');
+                        console.log('copied');
+                        isCmdHeld = false;
+                        break;
+                    }
+                    simulatedKeyPress = true;
                     simulateKeyPress('c', true);
-
+                    isShiftHeld = false;
             }
         }
         else if (modeProxy.currentMode === MODES.INSERT && event.key === 'Escape') {
             modeProxy.currentMode = MODES.NORMAL;
         }
     });
-    element.addEventListener('blur', () => {
-        modeProxy.currentMode = MODES.NORMAL;
-        updateModeIndicator();
-    });
+    //element.addEventListener('blur', () => {
+    //    modeProxy.currentMode = MODES.NORMAL;
+    //    updateModeIndicator();
+    //});
 }
 
 
@@ -392,9 +487,9 @@ const KEY_CODES = {
     'Enter': 13,
     'Shift': 16,
     'Cmd': 91,
-    'Option':18
+    'Option': 18
 };
-function simulateKeyPress(keyval, ctrlval = false,alt) {
+function simulateKeyPress(keyval, ctrlval = false) {
     const target = getTextTarget();
     if (target) {
         const keyCode = KEY_CODES[keyval] || keyval.keyCode;
@@ -404,7 +499,8 @@ function simulateKeyPress(keyval, ctrlval = false,alt) {
             which: keyCode,    // 'which' for compatibility
             ctrlKey: ctrlval,
             shiftKey: isShiftHeld,
-            altKey: alt,
+            altKey: isAltHeld,
+            metaKey: isCmdHeld,
             bubbles: true,
             cancelable: true
         });

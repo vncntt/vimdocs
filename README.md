@@ -1,6 +1,6 @@
 # vimdocs
-Vim for GoogleDocs (doesn't work for mac :skull:)\
-will add mac functionality soon. tedious but shouldn't be that hard
+Vim for GoogleDocs 
+Works for the most part for both Windows and Mac
 
 ## Installation
 
@@ -55,3 +55,9 @@ Click "Load unpacked" on the top left, navigate to where you put the folder and 
 - [x] hjklwb in visual mode
 - [x] d - delete highlighted text
 - [x] c - delete highlighted text + enter insert mode
+
+
+
+
+bugs with visual mode yank  
+implement yank and paste next time
