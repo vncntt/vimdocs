@@ -150,71 +150,37 @@ function attachKeyListener(element) {
                     break;
                 case 'w':
                     //next word
+                    performAction('ArrowRight', true);
                     if (isMacOS()) {
-                        isAltHeld = true;
                         simulateKeyPress('ArrowRight');
-                        isAltHeld = false;
-                        simulateKeyPress('ArrowRight');
-                        break;
                     }
-                    simulateKeyPress('ArrowRight', true);
                     break;
                 case 'b':
                     //prev word
-                    if (isMacOS()) {
-                        isAltHeld = true;
-                        simulateKeyPress('ArrowLeft');
-                        isAltHeld = false;
-                        break;
-                    }
-                    simulateKeyPress('ArrowLeft', true);
+                    performAction('ArrowLeft', true);
                     break;
                 case '0':
                     //need to add if(at beginning of line) do nothing
-                    if (isMacOS()) {
-                        isAltHeld = true;
-                        simulateKeyPress('ArrowUp');
-                        isAltHeld = false;
-                        break;
-                    }
-                    simulateKeyPress('ArrowUp', true);
+                    performAction('ArrowUp', true)
                     break;
                 case '$':
                     //end of line
-                    if (isMacOS()) {
-                        isAltHeld = true;
-                        simulateKeyPress('ArrowDown');
-                        isAltHeld = false;
-                        break;
+                    performAction('ArrowDown', true);
+                    if (!isMacOS()) {
+                        simulateKeyPress('ArrowLeft');
                     }
-                    simulateKeyPress('ArrowDown', true);
-                    simulateKeyPress('ArrowLeft');
                     break;
                 case 'I':
                     //insert at beginning of line
-                    if (isMacOS()) {
-                        isAltHeld = true;
-                        simulateKeyPress('ArrowUp');
-                        isAltHeld = false;
-                        modeProxy.currentMode = MODES.INSERT;
-                        break;
-                    }
-                    //simulateKeyPress('Home');
-                    simulateKeyPress('ArrowUp', true);
+                    performAction('ArrowUp', true);
                     modeProxy.currentMode = MODES.INSERT;
                     break;
                 case 'A':
                     //insert at end of line
-                    if (isMacOS()) {
-                        isAltHeld = true;
-                        simulateKeyPress('ArrowDown');
-                        isAltHeld = false;
-                        modeProxy.currentMode = MODES.INSERT;
-                        break;
+                    performAction('ArrowDown', true);
+                    if (!isMacOS()) {
+                        simulateKeyPress('ArrowLeft');
                     }
-                    //simulateKeyPress('End');
-                    simulateKeyPress('ArrowDown', true);
-                    simulateKeyPress('ArrowLeft');
                     modeProxy.currentMode = MODES.INSERT;
                     break;
                 case 'g':
@@ -253,6 +219,9 @@ function attachKeyListener(element) {
                 case 'r':
                     replacementPending = true;
                     const charListener = (charEvent) => {
+                        if (charEvent.key === "Shift") {
+                            return;
+                        }
                         replacementPending = false;
                         charEvent.stopPropagation();  // Stop propagation of the event
                         charEvent.preventDefault();   // Prevent default behavior
@@ -401,68 +370,25 @@ function attachKeyListener(element) {
                     break;
                 case 'w':
                     //next word
-                    if (isMacOS()) {
-                        isAltHeld = true;
-                        simulateKeyPress('ArrowRight');
-                        isAltHeld = false;
-                        simulateKeyPress('ArrowRight');
-                        break;
-                    }
-                    simulateKeyPress('ArrowRight', true);
+                    performAction('ArrowRight', true);
+                    if (isMacOS()) { simulateKeyPress('ArrowRight'); }
                     break;
                 case 'b':
                     //prev word
-                    if (isMacOS()) {
-                        isAltHeld = true;
-                        simulateKeyPress('ArrowLeft');
-                        isAltHeld = false;
-                        break;
-                    }
-                    simulateKeyPress('ArrowLeft', true);
+                    performAction('ArrowLeft', true);
                     break;
                 case '0':
                     //need to add if(at beginning of line) do nothing
-                    if (isMacOS()) {
-                        isAltHeld = true;
-                        simulateKeyPress('ArrowUp');
-                        isAltHeld = false;
-                        break;
-                    }
-                    simulateKeyPress('ArrowUp', true);
+                    performAction('ArrowUp', true);
                     break;
                 case '$':
                     //end of line
-                    if (isMacOS()) {
-                        isAltHeld = true;
-                        simulateKeyPress('ArrowDown');
-                        isAltHeld = false;
-                        break;
-                    }
-                    simulateKeyPress('ArrowDown', true);
-                    simulateKeyPress('ArrowLeft');
+                    performAction('ArrowDown', true);
+                    if (!isMacOS()) { simulateKeyPress('ArrowLeft'); }
                     break;
-                case 'd':
-                    console.log('entered visual mode d')
-                    simulateKeyPress('Backspace');
-                    modeProxy.currentMode = MODES.NORMAL;
-                    break;
-                //case 'c':
-                //        simulateKeyPress('Backspace');
-                //        modeProxy.currentMode = MODES.INSERT;
-                //        break;
                 case 'y':
-                    //broken rn
-                    if (isMacOS()) {
-                        isShiftHeld = false;
-                        isCmdHeld = true;
-                        simulateKeyPress('c');
-                        console.log('copied');
-                        isCmdHeld = false;
-                        break;
-                    }
-                    simulatedKeyPress = true;
-                    simulateKeyPress('c', true);
-                    isShiftHeld = false;
+                //don't know how to copy
+
             }
         }
         else if (modeProxy.currentMode === MODES.INSERT && event.key === 'Escape') {
@@ -505,6 +431,17 @@ function simulateKeyPress(keyval, ctrlval = false) {
             cancelable: true
         });
         target.dispatchEvent(simulatedEvent);
+    }
+}
+function performAction(key, ctrlval = false) {
+    if (isMacOS()) {
+        isAltHeld = true;
+        simulateKeyPress(key);
+        isAltHeld = false;
+
+    } else {
+        simulateKeyPress(key, ctrlval);
+        console.log(key, ctrlval);
     }
 }
 function simulateCharacter(letter) {
