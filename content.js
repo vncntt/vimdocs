@@ -440,6 +440,8 @@ function attachKeyListener(element) {
                         lastKeyPressed = 'g';
                     }
                     break;
+                case 'd':
+                    simulateKeyPress('Backspace')
                 default:
                     if (deletionPending || replacementPending) {
                         event.stopPropagation();
