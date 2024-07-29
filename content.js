@@ -441,7 +441,10 @@ function attachKeyListener(element) {
                     }
                     break;
                 case 'd':
-                    simulateKeyPress('Backspace')
+                    simulateKeyPress('Backspace');
+                case 'c':
+                    simulateKeyPress('Backspace');
+                    modeProxy.currentMode = MODES.INSERT;
                 default:
                     if (deletionPending || replacementPending) {
                         event.stopPropagation();

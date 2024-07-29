@@ -61,3 +61,4 @@ Click "Load unpacked" on the top left, navigate to where you put the folder and 
 
 bugs with visual mode yank  
 implement yank and paste next time
+dd is kind of buggy with lists and just in general
