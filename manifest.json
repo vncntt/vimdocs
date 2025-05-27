@@ -4,9 +4,6 @@
   "version": "1.0",
   "description": "Vim keybindings for Google Docs",
   "permissions": ["activeTab", "storage"],
-  "background": {
-    "service_worker": "background.js"
-  },
   "content_scripts": [
     {
       "matches": ["*://docs.google.com/document/*"],

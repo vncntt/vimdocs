@@ -118,7 +118,6 @@ let replacementPending = false;
 let deletionPending = false;
 let insideDeletion = false;
 
-
 function attachKeyListener(element) {
     element.addEventListener('keydown', (event) => {
         console.log('Key pressed:', event.key);
@@ -443,8 +442,6 @@ function attachKeyListener(element) {
                 case 'd':
                     simulateKeyPress('Backspace');
                 case 'c':
-                    simulateKeyPress('Backspace');
-                    modeProxy.currentMode = MODES.INSERT;
                 default:
                     if (deletionPending || replacementPending) {
                         event.stopPropagation();
@@ -461,8 +458,7 @@ function attachKeyListener(element) {
                     simulateKeyPress('End', true);
                     break;
                 case 'y':
-                //don't know how to copy
-
+                    // don't know how to copy
             }
         }
         else if (modeProxy.currentMode === MODES.INSERT && event.key === 'Escape') {
