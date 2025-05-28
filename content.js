@@ -1,7 +1,8 @@
 const MODES = {
     NORMAL: 'NORMAL',
     INSERT: 'INSERT',
-    VISUAL: 'VISUAL'
+    VISUAL: 'VISUAL',
+    VISUAL_LINE: 'VISUAL_LINE'
 };
 let modeData = {
     currentMode: MODES.NORMAL
@@ -39,7 +40,7 @@ function setCursorWidth(mode) {
         else if (mode === 'NORMAL') {
             isWide = false;
         }
-        else if (mode === 'VISUAL') {
+        else if (mode === 'VISUAL' || mode === MODES.VISUAL_LINE) {
             isWide = false;
         };
         if (isWide) {
@@ -63,16 +64,16 @@ function addModeIndicator() {
     indicator.style.color = 'white';
     indicator.style.borderRadius = '5px';
     indicator.style.zIndex = '9999';  // Ensure it's on top
-    indicator.textContent = modeProxy.currentMode;
+    indicator.textContent = modeProxy.currentMode === MODES.VISUAL_LINE ? "VISUAL LINE" : modeProxy.currentMode;
     document.body.appendChild(indicator);
 }
 // This function updates the mode indicator's content
 function updateModeIndicator() {
     const indicator = document.getElementById('vim-mode-indicator');
     if (indicator) {
-        indicator.textContent = modeProxy.currentMode;
+        indicator.textContent = modeProxy.currentMode === MODES.VISUAL_LINE ? "VISUAL LINE" : modeProxy.currentMode;
         setCursorWidth(modeProxy.currentMode);
-        if (modeProxy.currentMode === MODES.VISUAL) {
+        if (modeProxy.currentMode === MODES.VISUAL || modeProxy.currentMode === MODES.VISUAL_LINE) {
             isShiftHeld = true;
         } else {
             isShiftHeld = false;
@@ -231,6 +232,29 @@ function attachKeyListener(element) {
                         break;
                     }
                     simulateKeyPress('End', true);
+                    break;
+                case 'v':
+                    isShiftHeld = true;
+                    simulateKeyPress('ArrowRight');
+                    modeProxy.currentMode = MODES.VISUAL;
+                    break;
+                case 'V':
+                    if (isMacOS()) {
+                        isCmdHeld = true;
+                        simulateKeyPress('ArrowLeft');
+                        isCmdHeld = false;
+                    } else {
+                        simulateKeyPress('Home');
+                    }
+                    isShiftHeld = true; // Keep shift held for selection
+                    if (isMacOS()) {
+                        isCmdHeld = true;
+                        simulateKeyPress('ArrowRight');
+                        isCmdHeld = false;
+                    } else {
+                        simulateKeyPress('End');
+                    }
+                    modeProxy.currentMode = MODES.VISUAL_LINE;
                     break;
                 case 'x':
                     simulateKeyPress('ArrowRight');
@@ -458,7 +482,82 @@ function attachKeyListener(element) {
                     simulateKeyPress('End', true);
                     break;
                 case 'y':
-                    // don't know how to copy
+                    if (iframe && iframe.contentDocument) {
+                        try {
+                            const success = iframe.contentDocument.execCommand('copy');
+                            if (success) {
+                                console.log('Content copied to clipboard from VISUAL mode');
+                            } else {
+                                console.warn('Copy command was not successful in VISUAL mode. Ensure text is selected.');
+                            }
+                        } catch (err) {
+                            console.error('Failed to execute copy command in VISUAL mode:', err);
+                        }
+                    } else {
+                        console.warn('Iframe or contentDocument not found for copy operation in VISUAL mode.');
+                    }
+                    modeProxy.currentMode = MODES.NORMAL;
+                    break;
+            }
+        }
+        else if (modeProxy.currentMode === MODES.VISUAL_LINE) {
+            event.preventDefault();
+            switch (event.key) {
+                case 'j':
+                    simulateKeyPress('ArrowDown');
+                    break;
+                case 'k':
+                    // isShiftHeld is true because we are in VISUAL_LINE mode.
+                    if (isMacOS()) {
+                        // Simulate Cmd+ArrowLeft to go to the beginning of the current visual line.
+                        // Note: The existing '0' command uses simulateKeyPress('ArrowUp', false, true) for macOS,
+                        // which might be "go to top of paragraph/document". We need true "start of line".
+                        // Let's assume for now that 'ArrowLeft' with Cmd is the correct "start of line" for selection purposes.
+                        // If textTarget.dispatchKeyEvent for 'moveFocusToStartOfLine' or similar exists, that'd be better,
+                        // but we're using existing simulateKeyPress.
+                        // We need to ensure 'ArrowLeft' with Cmd is what we want for "start of visual line".
+                        // The existing '0' command for macOS is: simulateKeyPress('ArrowUp', false, true);
+                        // The existing '$' command for macOS is: simulateKeyPress('ArrowDown', false, true);
+                        // These might be more like "go to start/end of paragraph/block" rather than visual line.
+                        // Let's try to use the Mac standard "Command + Left Arrow" for start of line.
+                        // This means we need to set isCmdHeld = true temporarily.
+
+                        isCmdHeld = true;
+                        simulateKeyPress('ArrowLeft'); // Cmd+ArrowLeft
+                        isCmdHeld = false;
+                        
+                        simulateKeyPress('ArrowUp');   // Shift+ArrowUp (isShiftHeld is true globally for VISUAL_LINE)
+                    } else {
+                        simulateKeyPress('Home');      // Home key for non-MacOS (go to start of line)
+                        simulateKeyPress('ArrowUp');   // Shift+ArrowUp
+                    }
+                    break;
+                case 'y':
+                    if (iframe && iframe.contentDocument) {
+                        try {
+                            const success = iframe.contentDocument.execCommand('copy');
+                            if (success) {
+                                console.log('Content copied to clipboard');
+                            } else {
+                                console.warn('Copy command was not successful. Ensure text is selected.');
+                            }
+                        } catch (err) {
+                            console.error('Failed to execute copy command:', err);
+                        }
+                    } else {
+                        console.warn('Iframe or contentDocument not found for copy operation.');
+                    }
+                    modeProxy.currentMode = MODES.NORMAL;
+                    break;
+                case 'Escape':
+                    isShiftHeld = false; // Crucial: do this *before* simulating keys
+                    // Simulate a slight cursor movement to ensure selection is cleared.
+                    // ArrowLeft might be safer if we want to stay on the same line, near the start.
+                    simulateKeyPress('ArrowLeft'); 
+                    modeProxy.currentMode = MODES.NORMAL;
+                    break;
+                default:
+                    break;
             }
         }
         else if (modeProxy.currentMode === MODES.INSERT && event.key === 'Escape') {
