@@ -23,6 +23,8 @@ let isCmdHeld = false;
 let userCursor = null;
 let cursorCaret = null;
 let lastKeyPressed = null;
+let visualLineAnchor = null;  // Store the line number where Visual Line mode started
+let visualLineDirection = null;  // Track selection direction relative to anchor
 
 function isMacOS() {
     return navigator.userAgent.indexOf('Mac') !== -1;
@@ -239,6 +241,9 @@ function attachKeyListener(element) {
                     modeProxy.currentMode = MODES.VISUAL;
                     break;
                 case 'V':
+                    visualLineAnchor = getCurrentLineNumber();
+                    visualLineDirection = null;
+                    
                     if (isMacOS()) {
                         isCmdHeld = true;
                         simulateKeyPress('ArrowLeft');
@@ -504,32 +509,33 @@ function attachKeyListener(element) {
             event.preventDefault();
             switch (event.key) {
                 case 'j':
-                    simulateKeyPress('ArrowDown');
+                    if (visualLineAnchor !== null) {
+                        const currentLine = getCurrentLineNumber();
+                        if (currentLine !== null) {
+                            const newLine = currentLine + 1;
+                            const startLine = Math.min(visualLineAnchor, newLine);
+                            const endLine = Math.max(visualLineAnchor, newLine);
+                            selectFullLinesFromTo(startLine, endLine);
+                            visualLineDirection = newLine >= visualLineAnchor ? 'down' : 'up';
+                        }
+                    } else {
+                        simulateKeyPress('ArrowDown');
+                    }
                     break;
                 case 'k':
-                    // isShiftHeld is true because we are in VISUAL_LINE mode.
-                    if (isMacOS()) {
-                        // Simulate Cmd+ArrowLeft to go to the beginning of the current visual line.
-                        // Note: The existing '0' command uses simulateKeyPress('ArrowUp', false, true) for macOS,
-                        // which might be "go to top of paragraph/document". We need true "start of line".
-                        // Let's assume for now that 'ArrowLeft' with Cmd is the correct "start of line" for selection purposes.
-                        // If textTarget.dispatchKeyEvent for 'moveFocusToStartOfLine' or similar exists, that'd be better,
-                        // but we're using existing simulateKeyPress.
-                        // We need to ensure 'ArrowLeft' with Cmd is what we want for "start of visual line".
-                        // The existing '0' command for macOS is: simulateKeyPress('ArrowUp', false, true);
-                        // The existing '$' command for macOS is: simulateKeyPress('ArrowDown', false, true);
-                        // These might be more like "go to start/end of paragraph/block" rather than visual line.
-                        // Let's try to use the Mac standard "Command + Left Arrow" for start of line.
-                        // This means we need to set isCmdHeld = true temporarily.
-
-                        isCmdHeld = true;
-                        simulateKeyPress('ArrowLeft'); // Cmd+ArrowLeft
-                        isCmdHeld = false;
-                        
-                        simulateKeyPress('ArrowUp');   // Shift+ArrowUp (isShiftHeld is true globally for VISUAL_LINE)
+                    if (visualLineAnchor !== null) {
+                        const currentLine = getCurrentLineNumber();
+                        if (currentLine !== null) {
+                            const newLine = currentLine - 1;
+                            if (newLine >= 1) { // Don't go above first line
+                                const startLine = Math.min(visualLineAnchor, newLine);
+                                const endLine = Math.max(visualLineAnchor, newLine);
+                                selectFullLinesFromTo(startLine, endLine);
+                                visualLineDirection = newLine >= visualLineAnchor ? 'down' : 'up';
+                            }
+                        }
                     } else {
-                        simulateKeyPress('Home');      // Home key for non-MacOS (go to start of line)
-                        simulateKeyPress('ArrowUp');   // Shift+ArrowUp
+                        simulateKeyPress('ArrowUp');
                     }
                     break;
                 case 'y':
@@ -548,9 +554,13 @@ function attachKeyListener(element) {
                         console.warn('Iframe or contentDocument not found for copy operation.');
                     }
                     modeProxy.currentMode = MODES.NORMAL;
+                    visualLineAnchor = null;
+                    visualLineDirection = null;
                     break;
                 case 'Escape':
                     isShiftHeld = false; // Crucial: do this *before* simulating keys
+                    visualLineAnchor = null; // Clear anchor
+                    visualLineDirection = null; // Clear direction
                     // Simulate a slight cursor movement to ensure selection is cleared.
                     // ArrowLeft might be safer if we want to stay on the same line, near the start.
                     simulateKeyPress('ArrowLeft'); 
@@ -640,4 +650,67 @@ function isAtEndOfLine() {
 
     // Check if the temporary range's content is empty (i.e., cursor is at the end)
     return tempRange.toString() === '';
+}
+
+function getCurrentLineNumber() {
+    const selection = window.getSelection();
+    if (!selection.rangeCount) return null;
+    
+    const range = selection.getRangeAt(0);
+    const textTarget = getTextTarget();
+    if (!textTarget) return null;
+    
+    const preCaretRange = range.cloneRange();
+    preCaretRange.selectNodeContents(textTarget);
+    preCaretRange.setEnd(range.endContainer, range.endOffset);
+    
+    const text = preCaretRange.toString();
+    const lineNumber = (text.match(/\n/g) || []).length + 1;
+    return lineNumber;
+}
+
+function selectFullLinesFromTo(startLine, endLine) {
+    const textTarget = getTextTarget();
+    if (!textTarget) return;
+    
+    // Clear current selection
+    isShiftHeld = false;
+    simulateKeyPress('ArrowRight');
+    simulateKeyPress('ArrowLeft');
+    
+    if (isMacOS()) {
+        isCmdHeld = true;
+        simulateKeyPress('ArrowUp'); // Go to document start
+        isCmdHeld = false;
+    } else {
+        simulateKeyPress('Home', true); // Ctrl+Home
+    }
+    
+    for (let i = 1; i < startLine; i++) {
+        simulateKeyPress('ArrowDown');
+    }
+    
+    // Go to beginning of line
+    if (isMacOS()) {
+        isCmdHeld = true;
+        simulateKeyPress('ArrowLeft');
+        isCmdHeld = false;
+    } else {
+        simulateKeyPress('Home');
+    }
+    
+    // Start selection
+    isShiftHeld = true;
+    
+    for (let i = startLine; i < endLine; i++) {
+        simulateKeyPress('ArrowDown');
+    }
+    
+    if (isMacOS()) {
+        isCmdHeld = true;
+        simulateKeyPress('ArrowRight');
+        isCmdHeld = false;
+    } else {
+        simulateKeyPress('End');
+    }
 }
