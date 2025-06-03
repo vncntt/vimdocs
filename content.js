@@ -329,9 +329,7 @@ function attachKeyListener(element) {
                     if (!isAtEndOfLine()) {
                         if (isMacOS()) {
                             isShiftHeld = true;
-                            isCmdHeld = true;
-                            simulateKeyPress('ArrowRight');
-                            isCmdHeld = false;
+                            simulateKeyPress('ArrowDown', false, true);
                             isShiftHeld = false;
                         } else {
                             isShiftHeld = true;
