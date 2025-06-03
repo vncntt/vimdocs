@@ -325,6 +325,22 @@ function attachKeyListener(element) {
                     };
                     element.addEventListener('keydown', deletionListener);
                     break;
+                case 'D':
+                    if (!isAtEndOfLine()) {
+                        if (isMacOS()) {
+                            isShiftHeld = true;
+                            isCmdHeld = true;
+                            simulateKeyPress('ArrowRight');
+                            isCmdHeld = false;
+                            isShiftHeld = false;
+                        } else {
+                            isShiftHeld = true;
+                            simulateKeyPress('End');
+                            isShiftHeld = false;
+                        }
+                        simulateKeyPress('Backspace');
+                    }
+                    break;
                 case 'c':
                     deletionPending = true;
                     const deletionListener1 = (deletionEvent) => {

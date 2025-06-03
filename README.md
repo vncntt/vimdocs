@@ -47,6 +47,7 @@ Click "Load unpacked" on the top left, navigate to where you put the folder and 
 - [x] r - replace character
 - [x] dd - delete entire line
 - [x] dw - delete word
+- [x] D - delete to end of line
 - [ ] yy - yank line
 
 ## Visual Mode
