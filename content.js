@@ -24,6 +24,7 @@ let cursorCaret = null;
 let lastKeyPressed = null;
 let dispatchingKey = false;
 let pendingWordChange = null;
+let returningFromLink = false;
 
 function isMacOS() {
     return navigator.userAgent.indexOf('Mac') !== -1;
@@ -133,7 +134,22 @@ function attachKeyListener(element) {
         }
         if (event.ctrlKey || event.metaKey || event.altKey) {
             lastKeyPressed = null;
+            // Link dialogs collapse Docs' selection on apply. Hand control back
+            // in Normal mode while leaving the native selection for the dialog.
+            if (event.key.toLowerCase() === 'k' && (event.metaKey || event.ctrlKey) &&
+                [MODES.VISUAL, MODES.VISUAL_LINE].includes(modeProxy.currentMode)) {
+                modeProxy.currentMode = MODES.NORMAL;
+                returningFromLink = true;
+            }
             return;
+        }
+        if (returningFromLink) {
+            // Cancel can restore a native selection. Collapse it before the
+            // next Vim command; apply may already have collapsed it.
+            returningFromLink = false;
+            isShiftHeld = false;
+            simulateKeyPress('ArrowRight');
+            simulateKeyPress('ArrowLeft');
         }
         const previousKey = lastKeyPressed;
         lastKeyPressed = null;
@@ -234,9 +250,24 @@ function attachKeyListener(element) {
                     moveToLineBoundary(true);
                     modeProxy.currentMode = MODES.VISUAL_LINE;
                     break;
+                case 'y':
+                    if (previousKey === 'y') {
+                        moveToLineBoundary(false);
+                        const start = caretPosition();
+                        modeProxy.currentMode = MODES.VISUAL_LINE;
+                        moveToLineBoundary(true);
+                        if (!start || samePosition(start, caretPosition())) {
+                            modeProxy.currentMode = MODES.NORMAL;
+                            clipboardStatus('Empty line; clipboard unchanged');
+                        } else {
+                            yankSelection();
+                        }
+                    } else {
+                        lastKeyPressed = 'y';
+                    }
+                    break;
                 case 'x':
-                    simulateKeyPress('ArrowRight');
-                    simulateKeyPress('Backspace');
+                    deleteCharacter();
                     break;
                 case 'r':
                     replacementPending = true;
@@ -320,16 +351,18 @@ function attachKeyListener(element) {
                     simulateKeyPress('ArrowUp');
                     modeProxy.currentMode = MODES.INSERT;
                     break;
-                case 'e':
-                    if (isMacOS()) {
-                        simulateKeyPress('ArrowRight', false, true);
-                        simulateKeyPress('ArrowRight');
-                    } else {
-                        simulateKeyPress('ArrowRight', true);
-                    }
-                    simulateKeyPress('ArrowLeft');
+                case 'e': {
+                    const start = caretPosition();
+                    if (!start) break;
+                    // Move off the current final character before finding the
+                    // next word boundary; don't move backwards at document end.
+                    simulateKeyPress('ArrowRight');
+                    if (samePosition(start, caretPosition())) break;
+                    simulateKeyPress('ArrowRight', !isMacOS(), isMacOS());
+                    if (!isMacOS()) simulateKeyPress('ArrowLeft');
                     simulateKeyPress('ArrowLeft');
                     break;
+                }
                 case 'u':
                     if (isMacOS()) {
                         isCmdHeld = true;
@@ -573,6 +606,26 @@ function caretPosition() {
 
 function samePosition(a, b) {
     return a && b && a.x === b.x && a.y === b.y;
+}
+
+function deleteCharacter() {
+    const start = caretPosition();
+    if (!start) return;
+    isShiftHeld = true;
+    moveToLineBoundary(true);
+    isShiftHeld = false;
+    if (samePosition(start, caretPosition())) {
+        // Docs allows a caret after the final character; Vim's x must not
+        // consume the paragraph break there. Empty lines have nothing to delete.
+        moveToLineBoundary(false);
+        if (samePosition(start, caretPosition())) return;
+        moveToLineBoundary(true);
+        simulateKeyPress('ArrowLeft');
+    } else {
+        simulateKeyPress('ArrowLeft'); // collapse back to the original position
+    }
+    simulateKeyPress('ArrowRight');
+    simulateKeyPress('Backspace');
 }
 
 function deleteToLineEnd() {

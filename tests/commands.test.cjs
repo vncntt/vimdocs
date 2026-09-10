@@ -134,6 +134,61 @@ function editor(initial, cursor = 0, platform = 'Mac') {
 for (const platform of ['Mac', 'Windows']) {
     const make = (text, cursor = 0) => editor(text, cursor, platform);
 
+    for (const [text, cursor, expected] of [
+        ['first\nsecond\nthird', 2, 'first'],
+        ['first\nsecond\nthird', 8, 'second'],
+        ['first\nsecond\nthird', 15, 'third'],
+        ['café 世界 👋', 2, 'café 世界 👋'],
+    ]) test(`${platform}: yy copies displayed line at ${cursor} without edits`, () => {
+        const e = make(text, cursor); e.keys('y', 'y'); e.flush();
+        assert.equal(e.model.clipboard, expected); assert.equal(e.model.text, text);
+        assert.equal(e.mode(), 'NORMAL'); assert.equal(e.selected(), '');
+    });
+    test(`${platform}: yy on an empty line leaves clipboard unchanged`, () => {
+        const e = make('first\n\nlast', 6); e.keys('y', 'y'); e.flush();
+        assert.equal(e.model.clipboard, 'untouched'); assert.equal(e.mode(), 'NORMAL');
+        assert.equal(e.model.text, 'first\n\nlast');
+    });
+    test(`${platform}: yy prefix cancels on Escape and unrelated keys`, () => {
+        const e = make('alpha'); e.keys('y', 'Escape', 'y'); e.flush();
+        assert.equal(e.model.clipboard, 'untouched');
+        e.keys('l', 'y'); e.flush(); assert.equal(e.model.clipboard, 'untouched');
+        e.key('y'); e.flush(); assert.equal(e.model.clipboard, 'alpha');
+    });
+    test(`${platform}: link shortcut exits Visual without changing its native selection`, () => {
+        for (const mode of ['v', 'V']) {
+            const e = make('alpha'); e.key(mode); const selection = e.selected();
+            e.key('k', platform === 'Mac' ? { metaKey: true } : { ctrlKey: true });
+            assert.equal(e.mode(), 'NORMAL'); assert.equal(e.selected(), selection);
+            assert.equal(e.events.at(-1).defaultPrevented, false);
+        }
+    });
+    test(`${platform}: canceled link selection collapses before the next Vim command`, () => {
+        const e = make('alpha beta'); e.keys('v', 'l', 'l');
+        e.key('k', { metaKey: true }); e.key('d');
+        assert.equal(e.selected(), ''); assert.equal(e.model.text, 'alpha beta');
+        assert.equal(e.mode(), 'NORMAL');
+    });
+    test(`${platform}: formatting shortcuts keep Visual active`, () => {
+        const e = make('alpha'); e.key('v');
+        for (const key of ['b', 'i', 'u']) {
+            e.key(key, { metaKey: true }); assert.equal(e.mode(), 'VISUAL');
+            assert.equal(e.selected(), 'a'); assert.equal(e.events.at(-1).defaultPrevented, false);
+        }
+    });
+    test(`${platform}: repeated e advances to subsequent word ends`, () => {
+        const e = make('alpha beta gamma'); e.key('e'); assert.equal(e.model.cursor, 4);
+        e.key('e'); assert.equal(e.model.cursor, 9);
+    });
+    for (const [text, cursor, expected] of [
+        ['alpha\nbeta', 5, 'alph\nbeta'],
+        ['alpha', 5, 'alph'],
+        ['alpha\n\nbeta', 6, 'alpha\n\nbeta'],
+        ['', 0, ''],
+        ['alpha\nbeta', 2, 'alha\nbeta'],
+    ]) test(`${platform}: x respects line boundary at ${cursor} in ${JSON.stringify(text)}`, () => {
+        const e = make(text, cursor); e.key('x'); assert.equal(e.model.text, expected);
+    });
     for (const [name, text, cursor, expected] of [
         ['one space', 'alpha beta', 0, 'X beta'],
         ['multiple spaces', 'alpha   beta', 0, 'X   beta'],

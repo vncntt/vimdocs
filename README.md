@@ -46,7 +46,7 @@ Click "Load unpacked" on the top left, navigate to where you put the folder and 
 - [x] dd - delete entire displayed line
 - [x] dw - delete word
 - [x] D - delete to end of line
-- [ ] yy - yank line
+- [x] yy - yank displayed line to system clipboard
 - [x] p - paste plain text after cursor
 - [x] P - paste plain text before cursor
 
@@ -59,6 +59,8 @@ Click "Load unpacked" on the top left, navigate to where you put the folder and 
 
 - [x] y - yank selection to system clipboard (can paste in another tab)
 - [x] V then y - yank displayed line
+
+Cmd/Ctrl+B, I, U work on visual selections. Cmd/Ctrl+K opens links and returns to normal mode.
 
 visual-line j/k still needs work.
 

@@ -91,7 +91,7 @@ or background clipboard polling are used by the extension.
   paragraphs. Tables, page boundaries, RTL documents, and concurrent
   collaborators have not been validated.
 - `p`/`P` paste plain text; native Cmd/Ctrl+V remains available for rich content.
-  Linewise register placement, `yy`, numbered registers, counts, and dot-repeat
+  Linewise register placement, numbered registers, counts, and dot-repeat
   are not implemented. Deletes do not put deleted text into a Vim register.
 - Word motion boundaries (`w`/`b`/`e`) and replace/change undo grouping still
   need more work; `cw` uses a separate range-trimming path.
@@ -99,3 +99,20 @@ or background clipboard polling are used by the extension.
   the verified `V` workflow is selecting/yanking the current displayed line.
 - Cursor and selection behavior depend on Google's internal editor DOM and
   keyboard handling; future Docs updates may require changes.
+
+## Follow-up: yy and link handoff
+
+- 130 automated cases pass, including yy prefix cancellation, first/middle/final
+  lines, Unicode, empty-line no-op, formatting pass-through, link handoff,
+  repeated e, and x at line/document boundaries.
+- Live Chrome/macOS: yy on the middle line copied `second line` into a separate
+  browser tab using native Cmd+V; source text stayed unchanged.
+- Live: `e e rX` changed `alpha beta gamma` to `alpha betX gamma`; `$ x`
+  changed `alpha\nbeta` to `alph\nbeta` without joining paragraphs.
+- Live: bold, italic, underline and link insertion worked together; applying or
+  canceling Cmd+K returned to Normal. A subsequent single d did not edit text.
+- Link cancellation can restore a native selection; the next Vim command first
+  collapses that selection. yy copies displayed-line text without a trailing
+  newline; empty lines leave the clipboard unchanged and report that status.
+- Backwards characterwise Visual selection and Visual-line j/k still need a
+  broader selection rewrite. No counts, text objects, or other new commands added.
