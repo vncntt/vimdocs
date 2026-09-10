@@ -95,8 +95,8 @@ or background clipboard polling are used by the extension.
   are not implemented. Deletes do not put deleted text into a Vim register.
 - Word motion boundaries (`w`/`b`/`e`) and replace/change undo grouping still
   need more work; `cw` uses a separate range-trimming path.
-- Visual-line `j`/`k` selection reversal still needs a dedicated range model;
-  the verified `V` workflow is selecting/yanking the current displayed line.
+- Characterwise backwards Visual selection still needs work. Visual-line
+  selection has separate anchor/range handling.
 - Cursor and selection behavior depend on Google's internal editor DOM and
   keyboard handling; future Docs updates may require changes.
 
@@ -114,5 +114,39 @@ or background clipboard polling are used by the extension.
 - Link cancellation can restore a native selection; the next Vim command first
   collapses that selection. yy copies displayed-line text without a trailing
   newline; empty lines leave the clipboard unchanged and report that status.
-- Backwards characterwise Visual selection and Visual-line j/k still need a
-  broader selection rewrite. No counts, text objects, or other new commands added.
+- Backwards characterwise Visual selection still needs a broader selection
+  rewrite. Visual-line j/k was addressed in the follow-up below.
+
+## Follow-up: Visual-line selection
+
+- 182 automated cases pass across the Mac/Windows native-event models. Added
+  anchor crossing, unequal/empty lines, boundary clamping, full-line deletion,
+  change, yank, buffered input, copy failure, and Docs newline serialization.
+- Live Chrome/macOS: line 3 + V k selects complete lines 2 and 3; j returns to
+  line 3 alone. Further direction changes retain the anchor line. Tested empty
+  lines, top/bottom clamping, middle and final ranges, and multiline change.
+- Live: formatting followed by backward multiline yank copied both lines into
+  a separate browser tab using native Cmd+V.
+- Live: deleting the first displayed line of a wrapped word01–word20 paragraph
+  preserved word11–word20 and the following END paragraph. Deleting middle
+  paragraphs preserved both surrounding paragraphs.
+- Deletion probes adjacent characters with a collapsed caret and in-memory
+  copy events. Whole-line copy serialization and hidden selection-caret
+  geometry are not reliable indicators of paragraph/document boundaries.
+- Counts refer to displayed lines. Large selections rebuild via native keys;
+  tables, RTL, page transitions, and layout changes during selection remain
+  unvalidated. Windows still has model coverage only.
+
+### Independent red-team review
+
+Two reviewers challenged selection and deletion separately. Additional fixes:
+Escape preserves the active selected line, yank buffers rapid follow-up input,
+and async range reads stop if the editor detaches. Exhaustive tests cover 576
+five-motion selection sessions and 72 ordered deletion ranges. Native Docs
+serialization cases and paragraph replacement retaining a break are modeled.
+
+Final live checks compared plain-text clipboard output, not just screenshots:
+V k d on paragraphs 2–3 produced exactly the same `one`/`four` output as a fresh
+two-paragraph document. Deleting the empty middle paragraph left `one`/`three`
+adjacent. Paragraph-inclusive deletion uses Backspace directly because typing
+replacement text can preserve the final selected paragraph break in Docs.

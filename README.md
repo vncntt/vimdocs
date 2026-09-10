@@ -62,7 +62,8 @@ Click "Load unpacked" on the top left, navigate to where you put the folder and 
 
 Cmd/Ctrl+B, I, U work on visual selections. Cmd/Ctrl+K opens links and returns to normal mode.
 
-visual-line j/k still needs work.
+- [x] V then j/k - extend or shrink whole-line selection
+- [x] V then d - delete selected lines
 
 Reload the extension and Docs after updating.
 

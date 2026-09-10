@@ -11,7 +11,7 @@ function editor(initial, cursor = 0, platform = 'Mac') {
     const timers = [];
     const listeners = [];
     const events = [];
-    const lineStart = p => model.text.lastIndexOf('\n', p - 1) + 1;
+    const lineStart = p => p === 0 ? 0 : model.text.lastIndexOf('\n', p - 1) + 1;
     const lineEnd = p => { const end = model.text.indexOf('\n', p); return end < 0 ? model.text.length : end; };
     const selected = () => model.text.slice(Math.min(model.anchor, model.cursor), Math.max(model.anchor, model.cursor));
     const replace = text => {
@@ -26,13 +26,20 @@ function editor(initial, cursor = 0, platform = 'Mac') {
     function native(event) {
         if (event.defaultPrevented) return;
         if (event.type === 'copy') {
-            if (model.copyEventSucceeds) event.clipboardData.setData('text/plain', selected());
+            if (model.copyEventSucceeds) event.clipboardData.setData('text/plain', model.copyBreakAsSpace && selected() === '\n' ? ' ' : selected() + (model.copyAddsParagraphBreak && selected().includes('\n') ? '\n' : ''));
             const saved = { cursor: model.cursor, anchor: model.anchor };
             timers.push(() => Object.assign(model, saved));
             return;
         }
         if (event.type === 'paste') { replace(event.clipboardData.getData('text/plain')); return; }
-        if (event.type === 'keypress') { replace(String.fromCharCode(event.charCode)); return; }
+        if (event.type === 'keypress') {
+            // Live Docs keeps a selected trailing paragraph break when typing
+            // over the range; the caret remains before that preserved break.
+            const keepBreak = model.preserveParagraphBreakOnReplace && selected().endsWith('\n');
+            replace(String.fromCharCode(event.charCode) + (keepBreak ? '\n' : ''));
+            if (keepBreak) model.cursor = model.anchor = model.cursor - 1;
+            return;
+        }
         const { key, shiftKey: shift, ctrlKey: ctrl, metaKey: meta } = event;
         const p = model.cursor;
         if (key === 'Home') move(ctrl ? 0 : lineStart(p), shift);
@@ -127,8 +134,8 @@ function editor(initial, cursor = 0, platform = 'Mac') {
     const key = (key, modifiers = {}) => target.dispatchEvent(new KeyboardEvent('keydown', { key, isTrusted: true, ...modifiers }));
     const keys = (...sequence) => sequence.forEach(k => key(k));
     const flush = () => { while (timers.length) timers.shift()(); };
-    const settle = async () => { await new Promise(setImmediate); flush(); };
-    return { model, key, keys, flush, settle, selected, events, indicator, mode: () => vm.runInContext('modeProxy.currentMode', ctx) };
+    const settle = async () => { for (let i = 0; i < 8; i++) { await new Promise(setImmediate); flush(); } };
+    return { model, target, key, keys, flush, settle, selected, events, indicator, mode: () => vm.runInContext('modeProxy.currentMode', ctx) };
 }
 
 for (const platform of ['Mac', 'Windows']) {
@@ -188,6 +195,114 @@ for (const platform of ['Mac', 'Windows']) {
         ['alpha\nbeta', 2, 'alha\nbeta'],
     ]) test(`${platform}: x respects line boundary at ${cursor} in ${JSON.stringify(text)}`, () => {
         const e = make(text, cursor); e.key('x'); assert.equal(e.model.text, expected);
+    });
+    test(`${platform}: V k includes the starting line and reverses through it`, () => {
+        const e = make('one\ntwo words\nthree\nfour', 14);
+        e.key('V'); assert.equal(e.selected(), 'three');
+        e.key('k'); assert.equal(e.selected(), 'two words\nthree');
+        e.key('j'); assert.equal(e.selected(), 'three');
+        e.key('j'); assert.equal(e.selected(), 'three\nfour');
+        e.key('k'); assert.equal(e.selected(), 'three');
+    });
+    test(`${platform}: V j includes complete unequal lines and clamps at edges`, () => {
+        const e = make('one\ntwo words\nthree');
+        e.keys('V', 'k'); assert.equal(e.selected(), 'one');
+        e.key('j'); assert.equal(e.selected(), 'one\ntwo words');
+        e.keys('j', 'j', 'j'); assert.equal(e.selected(), 'one\ntwo words\nthree');
+        e.keys('k', 'k'); assert.equal(e.selected(), 'one');
+    });
+    test(`${platform}: Visual-line Escape stays on the active line in either direction`, () => {
+        const down = make('one\ntwo\nthree', 4);
+        down.keys('V', 'j', 'Escape');
+        assert.equal(down.model.cursor, 8); assert.equal(down.selected(), ''); assert.equal(down.mode(), 'NORMAL');
+        const up = make('one\ntwo\nthree', 4);
+        up.keys('V', 'k', 'Escape');
+        assert.equal(up.model.cursor, 0); assert.equal(up.selected(), ''); assert.equal(up.mode(), 'NORMAL');
+    });
+    test(`${platform}: Visual-line selection keeps its anchor through every five-step j/k sequence`, () => {
+        for (const lines of [['one', 'two words', 'x'], ['', '', 'last'], ['one', '', '']]) {
+            const text = lines.join('\n');
+            for (let anchor = 0; anchor < lines.length; anchor++) {
+                const cursor = lines.slice(0, anchor).reduce((n, line) => n + line.length + 1, 0);
+                for (let sequence = 0; sequence < 32; sequence++) {
+                    const e = make(text, cursor); e.key('V');
+                    let active = anchor;
+                    for (let step = 0; step < 5; step++) {
+                        const direction = (sequence >> step) & 1 ? 1 : -1;
+                        active = Math.max(0, Math.min(lines.length - 1, active + direction));
+                        e.key(direction > 0 ? 'j' : 'k');
+                        assert.equal(e.selected(), lines.slice(Math.min(anchor, active), Math.max(anchor, active) + 1).join('\n'));
+                    }
+                    assert.equal(e.model.text, text);
+                }
+            }
+        }
+    });
+    test(`${platform}: V crosses empty lines without moving the anchor`, () => {
+        const e = make('one\n\nthree', 4);
+        e.key('V'); assert.equal(e.selected(), '');
+        e.key('k'); assert.equal(e.selected(), 'one\n');
+        e.key('j'); assert.equal(e.selected(), '');
+        e.key('j'); assert.equal(e.selected(), '\nthree');
+        e.key('k'); assert.equal(e.selected(), '');
+        e.key('Escape'); assert.equal(e.model.cursor, 4); assert.equal(e.mode(), 'NORMAL');
+    });
+    for (const [text, cursor, motions, expected] of [
+        ['one\ntwo\nthree', 4, [], 'one\nthree'],
+        ['one\ntwo\nthree', 8, [], 'one\ntwo'],
+        ['one\ntwo\nthree', 4, ['k'], 'three'],
+        ['one\ntwo\nthree', 4, ['j'], 'one'],
+        ['one\ntwo\nthree', 0, ['j', 'j'], ''],
+        ['one\n\nthree', 4, [], 'one\nthree'],
+        ['one\n', 4, [], 'one'],
+        ['', 0, [], ''],
+    ]) test(`${platform}: V d deletes whole range ${JSON.stringify([text, cursor, motions])}`, async () => {
+        const e = make(text, cursor); e.keys('V', ...motions, 'd'); await e.settle();
+        assert.equal(e.model.text, expected); assert.equal(e.mode(), 'NORMAL'); assert.equal(e.selected(), '');
+    });
+    test(`${platform}: V k yank preserves both full lines`, () => {
+        const e = make('one\ntwo words\nthree', 14); e.keys('V', 'k', 'y'); e.flush();
+        assert.equal(e.model.clipboard, 'two words\nthree'); assert.equal(e.model.text, 'one\ntwo words\nthree');
+        assert.equal(e.mode(), 'NORMAL');
+    });
+    test(`${platform}: Visual-line yank buffers immediate editing until selection restoration`, async () => {
+        const e = make('one\ntwo\nthree');
+        e.keys('V', 'j', 'y', 'd', 'd'); await e.settle();
+        assert.equal(e.model.clipboard, 'one\ntwo'); assert.equal(e.model.text, 'two\nthree');
+        assert.equal(e.mode(), 'NORMAL'); assert.equal(e.selected(), '');
+    });
+    test(`${platform}: yy buffers immediate insert and characterwise yank buffers movement`, async () => {
+        const e = make('one\ntwo');
+        e.keys('y', 'y', 'i', 'X', 'Escape'); await e.settle();
+        assert.equal(e.model.clipboard, 'one'); assert.equal(e.model.text, 'Xone\ntwo');
+        const f = make('one\ntwo');
+        f.keys('v', 'l', 'y', 'j'); await f.settle();
+        assert.equal(f.model.clipboard, 'on'); assert.equal(f.model.cursor, 4);
+        assert.equal(f.mode(), 'NORMAL'); assert.equal(f.selected(), '');
+    });
+    test(`${platform}: V y on an empty line does not copy unrelated clipboard data`, () => {
+        const e = make('one\n\nthree', 4); e.keys('V', 'y'); e.flush();
+        assert.equal(e.model.clipboard, 'untouched'); assert.equal(e.mode(), 'VISUAL_LINE');
+        e.keys('j', 'y'); e.flush(); assert.equal(e.model.clipboard, '\nthree');
+    });
+    test(`${platform}: Visual-line deletion buffers following input and preserves clipboard`, async () => {
+        const e = make('one\ntwo\nthree', 4); e.keys('V', 'd', 'i', 'X', 'Escape'); await e.settle();
+        assert.equal(e.model.text, 'one\nXthree'); assert.equal(e.model.clipboard, 'untouched');
+        assert.equal(e.mode(), 'NORMAL');
+    });
+    test(`${platform}: failed Visual-line range read leaves text intact`, async () => {
+        const e = make('one\ntwo\nthree', 4); e.model.copyEventSucceeds = false;
+        e.keys('V', 'd'); await e.settle(); assert.equal(e.model.text, 'one\ntwo\nthree');
+        assert.equal(e.model.clipboard, 'untouched'); assert.equal(e.mode(), 'NORMAL');
+    });
+    test(`${platform}: Docs paragraph-copy serialization does not hide an empty-line break`, async () => {
+        const e = make('one\n\nthree', 4); e.model.copyAddsParagraphBreak = true;
+        e.keys('V', 'd'); await e.settle(); assert.equal(e.model.text, 'one\nthree');
+        e.keys('V', 'd'); await e.settle(); assert.equal(e.model.text, 'one');
+    });
+    test(`${platform}: V change preserves an insertion line`, () => {
+        const e = make('one\ntwo\nthree\nfour', 4); e.keys('V', 'j', 'c', 'X');
+        assert.equal(e.model.text, 'one\nX\nfour'); assert.equal(e.mode(), 'INSERT');
     });
     for (const [name, text, cursor, expected] of [
         ['one space', 'alpha beta', 0, 'X beta'],
@@ -327,5 +442,81 @@ for (const platform of ['Mac', 'Windows']) {
     test(`${platform}: I and A enter Insert at their respective line boundaries`, () => {
         const e = make('first\nsecond', 9); e.keys('I', 'X'); assert.equal(e.model.text, 'first\nXsecond');
         const f = make('first\nsecond', 9); f.keys('A', 'X'); assert.equal(f.model.text, 'first\nsecondX');
+    });
+}
+
+for (const platform of ['Mac', 'Windows']) {
+    test(`${platform}: Visual-line delete aborts if its editor detaches during copy`, async () => {
+        const e = editor('one\ntwo\nthree', 4, platform);
+        e.keys('V', 'd', 'i', 'X');
+        e.target.isConnected = false;
+        await e.settle();
+        assert.equal(e.model.text, 'one\ntwo\nthree');
+        assert.equal(e.model.clipboard, 'untouched');
+        assert.equal(e.mode(), 'NORMAL');
+        e.target.isConnected = true;
+        e.keys('i', 'Z');
+        assert.ok(e.model.text.includes('Z'), 'pending input lock is released');
+    });
+    test(`${platform}: Visual-line deletion handles every empty/nonempty line range`, async () => {
+        for (const lines of [['', '', ''], ['', 'two', ''], ['one', '', 'three'], ['one', 'two', 'three']]) {
+            for (let start = 0; start < lines.length; start++) {
+                for (let end = 0; end < lines.length; end++) {
+                    const cursor = lines.slice(0, start).reduce((n, line) => n + line.length + 1, 0);
+                    const e = editor(lines.join('\n'), cursor, platform);
+                    e.key('V');
+                    for (let i = 0; i < Math.abs(end - start); i++) e.key(end > start ? 'j' : 'k');
+                    e.key('d');
+                    await e.settle();
+                    const remaining = lines.filter((_, index) => index < Math.min(start, end) || index > Math.max(start, end));
+                    assert.equal(e.model.text, remaining.join('\n'), JSON.stringify({ lines, start, end }));
+                    assert.equal(e.model.clipboard, 'untouched');
+                    assert.equal(e.mode(), 'NORMAL');
+                }
+            }
+        }
+    });
+}
+
+for (const platform of ['Mac', 'Windows']) {
+    test(`${platform}: empty middle line deletion handles Docs copying its break as a space`, async () => {
+        const e = editor('one\n\nthree', 4, platform);
+        e.model.copyBreakAsSpace = true;
+        e.keys('V', 'd');
+        await e.settle();
+        assert.equal(e.model.text, 'one\nthree');
+        assert.equal(e.model.clipboard, 'untouched');
+    });
+}
+
+for (const platform of ['Mac', 'Windows']) {
+    test(`${platform}: two-character break probes tolerate Docs paragraph serialization`, async () => {
+        for (const [text, cursor, expected] of [
+            ['one\ntwo\nthree', 4, 'one\nthree'],
+            ['one\ntwo', 4, 'one'],
+            ['one\n', 0, ''],
+            ['\none', 1, ''],
+            ['one\n', 4, 'one'],
+        ]) {
+            const e = editor(text, cursor, platform);
+            e.model.copyAddsParagraphBreak = true;
+            e.model.copyBreakAsSpace = true;
+            e.keys('V', 'd');
+            await e.settle();
+            assert.equal(e.model.text, expected, JSON.stringify({ text, cursor }));
+            assert.equal(e.model.clipboard, 'untouched');
+        }
+    });
+}
+
+for (const platform of ['Mac', 'Windows']) {
+    test(`${platform}: deleting complete paragraphs does not leave Docs preserved replacement break`, async () => {
+        const e = editor('one\ntwo\nthree\nfour', 8, platform);
+        e.model.preserveParagraphBreakOnReplace = true;
+        e.keys('V', 'k', 'd');
+        await e.settle();
+        assert.equal(e.model.text, 'one\nfour');
+        assert.equal(e.model.clipboard, 'untouched');
+        assert.equal(e.mode(), 'NORMAL');
     });
 }
