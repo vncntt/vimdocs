@@ -37,7 +37,7 @@ Click "Load unpacked" on the top left, navigate to where you put the folder and 
 
 ## Change
 
-- [ ] cw - change word
+- [x] cw - change word (keeps the space after it)
 
 ## Editing
 
@@ -60,7 +60,7 @@ Click "Load unpacked" on the top left, navigate to where you put the folder and 
 - [x] y - yank selection to system clipboard (can paste in another tab)
 - [x] V then y - yank displayed line
 
-cw still eats the space after the word; visual-line j/k needs work.
+visual-line j/k still needs work.
 
 Reload the extension and Docs after updating.
 

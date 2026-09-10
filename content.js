@@ -23,6 +23,7 @@ let userCursor = null;
 let cursorCaret = null;
 let lastKeyPressed = null;
 let dispatchingKey = false;
+let pendingWordChange = null;
 
 function isMacOS() {
     return navigator.userAgent.indexOf('Mac') !== -1;
@@ -123,6 +124,13 @@ function attachKeyListener(element) {
     element.addEventListener('keydown', (event) => {
         // Native editing events must reach Docs without being parsed as Vim commands.
         if (dispatchingKey || event.isComposing) return;
+        if (pendingWordChange) {
+            event.preventDefault();
+            event.stopPropagation();
+            pendingWordChange.keys.push({ key: event.key, ctrlKey: event.ctrlKey,
+                metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey });
+            return;
+        }
         if (event.ctrlKey || event.metaKey || event.altKey) {
             lastKeyPressed = null;
             return;
@@ -294,20 +302,7 @@ function attachKeyListener(element) {
                         deletionEvent.stopPropagation();
                         deletionEvent.preventDefault();
                         if (deletionEvent.key === 'w') {
-                            if (isMacOS()) {
-                                isShiftHeld = true;
-                                simulateKeyPress('ArrowRight',false,true);
-                                isShiftHeld = false;
-                                simulateKeyPress('Backspace');
-                                modeProxy.currentMode = MODES.INSERT;
-                            }
-                            else {
-                                isShiftHeld = true;
-                                simulateKeyPress('ArrowRight', true);
-                                isShiftHeld = false;
-                                simulateKeyPress('Backspace');
-                                modeProxy.currentMode = MODES.INSERT;
-                            }
+                            changeWord();
                         }
                         insideDeletion = false;
                         element.removeEventListener('keydown', deletionListener1);
@@ -670,4 +665,63 @@ async function pasteClipboard(after) {
     } catch (error) {
         clipboardStatus('Paste failed; use Cmd/Ctrl+V');
     }
+}
+
+function changeWord() {
+    const target = getTextTarget();
+    const start = caretPosition();
+    if (!target || !start) return;
+    isShiftHeld = true;
+    simulateKeyPress('ArrowRight', !isMacOS(), isMacOS());
+    isShiftHeld = false;
+    if (samePosition(start, caretPosition())) {
+        modeProxy.currentMode = MODES.INSERT;
+        return;
+    }
+
+    // Ask Docs for this range using an in-memory copy event. Unlike execCommand
+    // or navigator.clipboard, this does not read or overwrite the OS clipboard.
+    const data = new DataTransfer();
+    const transaction = { keys: [] };
+    pendingWordChange = transaction;
+    target.dispatchEvent(new ClipboardEvent('copy', {
+        clipboardData: data, bubbles: true, cancelable: true,
+    }));
+    const selected = data.getData('text/plain');
+    // cw changes the remaining keyword/punctuation run, or just the whitespace
+    // when starting on blanks. It must never consume the following word/break.
+    const prefix = selected.match(/^[^\S\r\n]+|^[\p{L}\p{N}\p{M}_]+|^[^\p{L}\p{N}\p{M}_\s]+/u)?.[0] || '';
+
+    // Docs restores its temporary copy selection on a timer. Finish after that,
+    // and replay rapid follow-up input so cw<Escape> and cwTEXT stay ordered.
+    setTimeout(() => {
+        if (selected) {
+            if (prefix) {
+                isShiftHeld = true;
+                const tail = selected.slice(prefix.length);
+                const characters = new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(tail);
+                for (const ignored of characters) simulateKeyPress('ArrowLeft');
+                isShiftHeld = false;
+                // Backspace on a selected word invokes Docs' smart deletion,
+                // which also removes the neighboring space. Replace the range
+                // first, then remove only the single temporary character.
+                simulateCharacter(' ');
+                simulateKeyPress('Backspace');
+            } else {
+                simulateKeyPress('ArrowLeft');
+            }
+            modeProxy.currentMode = MODES.INSERT;
+        } else {
+            simulateKeyPress('ArrowLeft');
+            clipboardStatus('Could not read word; no text changed');
+        }
+        pendingWordChange = null;
+        for (const key of transaction.keys) {
+            const event = new KeyboardEvent('keydown', { ...key, bubbles: true, cancelable: true });
+            target.dispatchEvent(event);
+            if (!event.defaultPrevented && key.key.length === 1 && !key.ctrlKey && !key.metaKey && !key.altKey) {
+                simulateCharacter(key.key);
+            }
+        }
+    }, 0);
 }

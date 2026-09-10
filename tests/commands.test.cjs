@@ -7,7 +7,7 @@ const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'conte
 // This models an editor's native key/range contract, not Google's private DOM.
 // Live Docs + OS clipboard checks are documented separately in TESTING.md.
 function editor(initial, cursor = 0, platform = 'Mac') {
-    const model = { text: initial, cursor, anchor: cursor, clipboard: 'untouched', copySucceeds: true, pasteSucceeds: true, hasCaret: true };
+    const model = { text: initial, cursor, anchor: cursor, clipboard: 'untouched', copySucceeds: true, copyEventSucceeds: true, pasteSucceeds: true, hasCaret: true };
     const timers = [];
     const listeners = [];
     const events = [];
@@ -25,6 +25,12 @@ function editor(initial, cursor = 0, platform = 'Mac') {
     };
     function native(event) {
         if (event.defaultPrevented) return;
+        if (event.type === 'copy') {
+            if (model.copyEventSucceeds) event.clipboardData.setData('text/plain', selected());
+            const saved = { cursor: model.cursor, anchor: model.anchor };
+            timers.push(() => Object.assign(model, saved));
+            return;
+        }
         if (event.type === 'paste') { replace(event.clipboardData.getData('text/plain')); return; }
         if (event.type === 'keypress') { replace(String.fromCharCode(event.charCode)); return; }
         const { key, shiftKey: shift, ctrlKey: ctrl, metaKey: meta } = event;
@@ -34,17 +40,29 @@ function editor(initial, cursor = 0, platform = 'Mac') {
         else if (key === 'ArrowLeft' || key === 'ArrowRight') {
             const right = key === 'ArrowRight';
             if (!shift && model.anchor !== p) move(right ? Math.max(p, model.anchor) : Math.min(p, model.anchor), false);
-            else move(p + (right ? 1 : -1), shift);
+            else if (right && (event.altKey || ctrl)) {
+                const tail = model.text.slice(p);
+                const word = tail.match(/^[ \t]*[^\s]+/)?.[0] || tail.match(/^\s+/)?.[0] || '';
+                const trailing = platform === 'Windows' ? tail.slice(word.length).match(/^[ \t]*/)[0].length : 0;
+                move(p + word.length + trailing, shift);
+            } else move(p + (right ? 1 : -1), shift);
         } else if (key === 'ArrowUp' || key === 'ArrowDown') {
             if (meta) { move(key === 'ArrowUp' ? 0 : model.text.length, shift); return; }
             const start = lineStart(p), col = p - start;
             if (key === 'ArrowUp') move(start === 0 ? 0 : Math.min(start - 1, lineStart(start - 1) + col), shift);
             else { const next = lineEnd(p); move(next === model.text.length ? next : Math.min(lineEnd(next + 1), next + 1 + col), shift); }
         } else if (key === 'Backspace') {
+            // Docs smart deletion removes an adjacent space when a whole word
+            // is selected. This is the original cw regression reproduced live.
+            const high = Math.max(model.anchor, p);
+            if (/^[\p{L}\p{N}_]+$/u.test(selected()) && model.text[high] === ' ') {
+                if (model.cursor === high) model.cursor++;
+                else model.anchor++;
+            }
             if (model.anchor === p) model.anchor = Math.max(0, p - 1);
             replace('');
         } else if (key === 'Enter') replace('\n');
-        else if (key.length === 1 && !meta && !ctrl && !event.altKey) replace(key);
+        else if (event.isTrusted && key.length === 1 && !meta && !ctrl && !event.altKey) replace(key);
     }
     class KeyboardEvent {
         constructor(type, data) { Object.assign(this, { type, defaultPrevented: false }, data); }
@@ -106,7 +124,7 @@ function editor(initial, cursor = 0, platform = 'Mac') {
     } } };
     const ctx = vm.createContext({ document, navigator, KeyboardEvent, ClipboardEvent: KeyboardEvent, DataTransfer, console, setInterval() { return 1; }, clearInterval() {}, setTimeout(callback) { timers.push(callback); } });
     vm.runInContext(source + '\nattachKeyListener(textTarget);', ctx);
-    const key = (key, modifiers = {}) => target.dispatchEvent(new KeyboardEvent('keydown', { key, ...modifiers }));
+    const key = (key, modifiers = {}) => target.dispatchEvent(new KeyboardEvent('keydown', { key, isTrusted: true, ...modifiers }));
     const keys = (...sequence) => sequence.forEach(k => key(k));
     const flush = () => { while (timers.length) timers.shift()(); };
     const settle = async () => { await new Promise(setImmediate); flush(); };
@@ -115,6 +133,52 @@ function editor(initial, cursor = 0, platform = 'Mac') {
 
 for (const platform of ['Mac', 'Windows']) {
     const make = (text, cursor = 0) => editor(text, cursor, platform);
+
+    for (const [name, text, cursor, expected] of [
+        ['one space', 'alpha beta', 0, 'X beta'],
+        ['multiple spaces', 'alpha   beta', 0, 'X   beta'],
+        ['middle of word', 'alpha beta', 2, 'alX beta'],
+        ['last character of word', 'alpha beta', 4, 'alphX beta'],
+        ['single-letter word', 'a beta', 0, 'X beta'],
+        ['line-final word', 'alpha\nbeta', 0, 'X\nbeta'],
+        ['document-final word', 'alpha', 0, 'X'],
+        ['empty document', '', 0, 'X'],
+        ['end of document', 'alpha', 5, 'alphaX'],
+        ['empty middle line', 'alpha\n\nbeta', 6, 'alpha\nX\nbeta'],
+        ['whitespace', 'alpha   beta', 5, 'alphaXbeta'],
+        ['punctuation boundary', 'alpha,beta', 0, 'X,beta'],
+        ['punctuation run', 'alpha...beta', 5, 'alphaXbeta'],
+        ['underscore', 'alpha_beta next', 0, 'X next'],
+        ['accented word', 'café beta', 0, 'X beta'],
+        ['CJK word', '世界 beta', 0, 'X beta'],
+    ]) test(`${platform}: cw preserves surrounding text at ${name}`, () => {
+        const e = make(text, cursor); e.keys('c', 'w'); e.flush();
+        assert.equal(e.mode(), 'INSERT'); e.key('X');
+        assert.equal(e.model.text, expected); assert.equal(e.model.clipboard, 'untouched');
+    });
+    test(`${platform}: rapid cwTEXT Escape input is replayed after copy restoration`, () => {
+        const e = make('alpha beta'); e.keys('c', 'w', 'X', 'Y', 'Escape'); e.flush();
+        assert.equal(e.model.text, 'XY beta'); assert.equal(e.mode(), 'NORMAL');
+        assert.equal(e.model.clipboard, 'untouched');
+    });
+    test(`${platform}: consecutive buffered cw edits remain ordered across lines`, () => {
+        const e = make('alpha beta\nlastword');
+        e.keys('c', 'w', 'X', 'Escape', 'j', '0', 'c', 'w', 'Y', 'Escape'); e.flush();
+        assert.equal(e.model.text, 'X beta\nY'); assert.equal(e.mode(), 'NORMAL');
+    });
+    test(`${platform}: cw Escape leaves an empty change without eating the separator`, () => {
+        const e = make('alpha beta'); e.keys('c', 'w', 'Escape'); e.flush();
+        assert.equal(e.model.text, ' beta'); assert.equal(e.mode(), 'NORMAL');
+    });
+    test(`${platform}: c Escape cancels the operator without selecting or deleting`, () => {
+        const e = make('alpha beta'); e.keys('c', 'Escape'); e.flush();
+        assert.equal(e.model.text, 'alpha beta'); assert.equal(e.selected(), ''); assert.equal(e.mode(), 'NORMAL');
+    });
+    test(`${platform}: unsupported range-copy fails without changing text or clipboard`, () => {
+        const e = make('alpha beta'); e.model.copyEventSucceeds = false; e.keys('c', 'w'); e.flush();
+        assert.equal(e.model.text, 'alpha beta'); assert.equal(e.model.clipboard, 'untouched');
+        assert.equal(e.mode(), 'NORMAL'); assert.match(e.indicator.textContent, /no text changed/);
+    });
     test(`${platform}: Escape cancels replacement without changing text or caret`, () => {
         const e = make('alpha'); e.keys('r', 'Escape');
         assert.equal(e.model.text, 'alpha'); assert.equal(e.model.cursor, 0);

@@ -49,6 +49,8 @@ At `content.js:515-523`, `c` has no implementation and `d` never switches to NOR
 
 ### P2: cw removes the word separator
 
+Follow-up: fixed. The later probe showed that Docs selected the word without the separator; its smart deletion removed the adjacent space. The replacement-based change in `TESTING.md` avoids that behavior.
+
 **Live confirmed.** On `alpha beta gamma`, `ggcwCHANGED<Escape>` produced `CHANGEDbeta gamma`, losing the space before `beta`. The desired result is `CHANGED beta gamma`.
 
 `content.js:352-365` implements change-word with the same native word-selection motion used for deletion. The live Docs word selection includes the separator here. Give `cw` its own end-of-word range semantics and test punctuation, repeated spaces, and starting inside a word.
