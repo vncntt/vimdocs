@@ -10,7 +10,6 @@ let modeData = {
 let modeProxy = new Proxy(modeData, {
     set: function (target, key, value) {
         target[key] = value;
-        //holy shit the line above has to come first. took me like 40 min to find this bug ugh
         if (key === 'currentMode') {
             updateModeIndicator();
         }
@@ -23,6 +22,10 @@ let isCmdHeld = false;
 let userCursor = null;
 let cursorCaret = null;
 let lastKeyPressed = null;
+let dispatchingKey = false;
+let pendingWordChange = null;
+let returningFromLink = false;
+let visualLine = null;
 
 function isMacOS() {
     return navigator.userAgent.indexOf('Mac') !== -1;
@@ -33,7 +36,7 @@ function isMacOS() {
  */
 function setCursorWidth(mode) {
     if (cursorCaret) {
-        isWide = null;
+        let isWide = null;
         if (mode === 'INSERT') {
             isWide = true;
         }
@@ -121,7 +124,36 @@ let insideDeletion = false;
 
 function attachKeyListener(element) {
     element.addEventListener('keydown', (event) => {
-        console.log('Key pressed:', event.key);
+        // Native editing events must reach Docs without being parsed as Vim commands.
+        if (dispatchingKey || event.isComposing) return;
+        if (pendingWordChange) {
+            event.preventDefault();
+            event.stopPropagation();
+            pendingWordChange.keys.push({ key: event.key, ctrlKey: event.ctrlKey,
+                metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey });
+            return;
+        }
+        if (event.ctrlKey || event.metaKey || event.altKey) {
+            lastKeyPressed = null;
+            // Link dialogs collapse Docs' selection on apply. Hand control back
+            // in Normal mode while leaving the native selection for the dialog.
+            if (event.key.toLowerCase() === 'k' && (event.metaKey || event.ctrlKey) &&
+                [MODES.VISUAL, MODES.VISUAL_LINE].includes(modeProxy.currentMode)) {
+                modeProxy.currentMode = MODES.NORMAL;
+                returningFromLink = true;
+            }
+            return;
+        }
+        if (returningFromLink) {
+            // Cancel can restore a native selection. Collapse it before the
+            // next Vim command; apply may already have collapsed it.
+            returningFromLink = false;
+            isShiftHeld = false;
+            simulateKeyPress('ArrowRight');
+            simulateKeyPress('ArrowLeft');
+        }
+        const previousKey = lastKeyPressed;
+        lastKeyPressed = null;
         if (replacementPending || deletionPending) {
             // A replacement is pending, don't process in this main handler
             return;
@@ -166,46 +198,21 @@ function attachKeyListener(element) {
                     performAction('ArrowLeft', true);
                     break;
                 case '0':
-                    //need to add if(at beginning of line) do nothing
-                    if (isMacOS()) {
-                        simulateKeyPress('ArrowUp', false, true);
-                        break;
-                    }
-                    performAction('ArrowUp', true)
+                    moveToLineBoundary(false);
                     break;
                 case '$':
-                    //end of line
-                    //implement if at end of line, don't do anything
-                    if (isMacOS()) {
-                        simulateKeyPress('ArrowDown', false, true);
-                    } else {
-                        performAction('ArrowDown', true);
-                        performAction('ArrowLeft', true);
-                    }
+                    moveToLineBoundary(true);
                     break;
                 case 'I':
-                    //insert at beginning of line
-                    if (isMacOS()) {
-                        simulateKeyPress('ArrowUp', false, true);
-                    }
-                    else {
-                        performAction('ArrowUp', true);
-                    }
+                    moveToLineBoundary(false);
                     modeProxy.currentMode = MODES.INSERT;
                     break;
                 case 'A':
-                    //insert at end of line
-                    if (isMacOS()) {
-                        simulateKeyPress('ArrowDown', false, true);
-                    }
-                    else {
-                        performAction('ArrowLeft',true);
-                    }
+                    moveToLineBoundary(true);
                     modeProxy.currentMode = MODES.INSERT;
                     break;
                 case 'g':
-                    //there's a small bug where if you do "Gg" it will go to the beginning of the document when it's not supposed to
-                    if (lastKeyPressed === 'g') {
+                    if (previousKey === 'g') {
                         if (isMacOS()) {
                             isCmdHeld = true;
                             simulateKeyPress('ArrowUp');
@@ -239,37 +246,35 @@ function attachKeyListener(element) {
                     modeProxy.currentMode = MODES.VISUAL;
                     break;
                 case 'V':
-                    if (isMacOS()) {
-                        isCmdHeld = true;
-                        simulateKeyPress('ArrowLeft');
-                        isCmdHeld = false;
+                    beginVisualLine();
+                    break;
+                case 'y':
+                    if (previousKey === 'y') {
+                        beginVisualLine();
+                        if (!visualLine?.selected) {
+                            modeProxy.currentMode = MODES.NORMAL;
+                            clipboardStatus('Empty line; clipboard unchanged');
+                        } else {
+                            yankSelection();
+                        }
                     } else {
-                        simulateKeyPress('Home');
+                        lastKeyPressed = 'y';
                     }
-                    isShiftHeld = true; // Keep shift held for selection
-                    if (isMacOS()) {
-                        isCmdHeld = true;
-                        simulateKeyPress('ArrowRight');
-                        isCmdHeld = false;
-                    } else {
-                        simulateKeyPress('End');
-                    }
-                    modeProxy.currentMode = MODES.VISUAL_LINE;
                     break;
                 case 'x':
-                    simulateKeyPress('ArrowRight');
-                    simulateKeyPress('Backspace');
+                    deleteCharacter();
                     break;
                 case 'r':
                     replacementPending = true;
                     const charListener = (charEvent) => {
-                        if (charEvent.key === "Shift") {
-                            return;
-                        }
+                        if (dispatchingKey) return;
+                        if (['Shift', 'Control', 'Alt', 'Meta'].includes(charEvent.key)) return;
                         replacementPending = false;
                         charEvent.stopPropagation();  // Stop propagation of the event
                         charEvent.preventDefault();   // Prevent default behavior
                         element.removeEventListener('keydown', charListener);
+                        if (charEvent.key === 'Escape' || charEvent.key.length !== 1 ||
+                            charEvent.ctrlKey || charEvent.metaKey || charEvent.altKey || charEvent.isComposing) return;
                         simulateKeyPress('ArrowRight');
                         simulateKeyPress('Backspace');
                         simulateCharacter(charEvent.key);
@@ -280,7 +285,7 @@ function attachKeyListener(element) {
                 case 'd':
                     deletionPending = true;
                     const deletionListener = (deletionEvent) => {
-                        if (insideDeletion) {
+                        if (dispatchingKey || insideDeletion) {
                             return;
                         }
                         insideDeletion = true;
@@ -288,23 +293,7 @@ function attachKeyListener(element) {
                         deletionEvent.stopPropagation();
                         deletionEvent.preventDefault();
                         if (deletionEvent.key === 'd') {
-                            if (isMacOS()) {
-                                //doesn't work if at beginning of line
-                                simulateKeyPress('ArrowUp',false,true);
-                                isShiftHeld = true;
-                                simulateKeyPress('ArrowDown',false,true);
-                                isShiftHeld = false;
-                                simulateKeyPress('Backspace');
-
-                           }
-                            else {
-                                simulateKeyPress('ArrowDown', true);
-                                simulateKeyPress('ArrowLeft');
-                                isShiftHeld = true;
-                                simulateKeyPress('ArrowUp', true);
-                                simulateKeyPress('Backspace');
-                                isShiftHeld = false;
-                            }
+                            deleteLine();
                         }
                         else if (deletionEvent.key === 'w') {
                             if (isMacOS()) {
@@ -326,23 +315,12 @@ function attachKeyListener(element) {
                     element.addEventListener('keydown', deletionListener);
                     break;
                 case 'D':
-                    if (!isAtEndOfLine()) {
-                        if (isMacOS()) {
-                            isShiftHeld = true;
-                            simulateKeyPress('ArrowDown', false, true);
-                            isShiftHeld = false;
-                        } else {
-                            isShiftHeld = true;
-                            simulateKeyPress('End');
-                            isShiftHeld = false;
-                        }
-                        simulateKeyPress('Backspace');
-                    }
+                    deleteToLineEnd();
                     break;
                 case 'c':
                     deletionPending = true;
                     const deletionListener1 = (deletionEvent) => {
-                        if (insideDeletion) {
+                        if (dispatchingKey || insideDeletion) {
                             return;
                         }
                         insideDeletion = true;
@@ -350,49 +328,36 @@ function attachKeyListener(element) {
                         deletionEvent.stopPropagation();
                         deletionEvent.preventDefault();
                         if (deletionEvent.key === 'w') {
-                            if (isMacOS()) {
-                                isShiftHeld = true;
-                                simulateKeyPress('ArrowRight',false,true);
-                                isShiftHeld = false;
-                                simulateKeyPress('Backspace');
-                                modeProxy.currentMode = MODES.INSERT;
-                            }
-                            else {
-                                isShiftHeld = true;
-                                simulateKeyPress('ArrowRight', true);
-                                isShiftHeld = false;
-                                simulateKeyPress('Backspace');
-                                modeProxy.currentMode = MODES.INSERT;
-                            }
+                            changeWord();
                         }
                         insideDeletion = false;
                         element.removeEventListener('keydown', deletionListener1);
                     };
                     element.addEventListener('keydown', deletionListener1);
                     break;
-                case 'v':
-                    isShiftHeld = true;
-                    simulateKeyPress('ArrowRight');
-                    modeProxy.currentMode = MODES.VISUAL;
-                    break;
                 case 'o':
-                    //doesn't work at the end of a line
-                    simulateKeyPress('$');
+                    moveToLineBoundary(true);
                     simulateKeyPress('Enter');
                     modeProxy.currentMode = MODES.INSERT;
                     break;
                 case 'O':
-                    //doesn't work at beginning of line because of '0' bug
-                    simulateKeyPress('0');
+                    moveToLineBoundary(false);
                     simulateKeyPress('Enter');
                     simulateKeyPress('ArrowUp');
                     modeProxy.currentMode = MODES.INSERT;
                     break;
-                case 'e':
-                    simulateKeyPress('w');
-                    simulateKeyPress('ArrowLeft');
+                case 'e': {
+                    const start = caretPosition();
+                    if (!start) break;
+                    // Move off the current final character before finding the
+                    // next word boundary; don't move backwards at document end.
+                    simulateKeyPress('ArrowRight');
+                    if (samePosition(start, caretPosition())) break;
+                    simulateKeyPress('ArrowRight', !isMacOS(), isMacOS());
+                    if (!isMacOS()) simulateKeyPress('ArrowLeft');
                     simulateKeyPress('ArrowLeft');
                     break;
+                }
                 case 'u':
                     if (isMacOS()) {
                         isCmdHeld = true;
@@ -401,6 +366,12 @@ function attachKeyListener(element) {
                         break;
                     }
                     simulateKeyPress('z', true);
+                    break;
+                case 'p':
+                    pasteClipboard(true);
+                    break;
+                case 'P':
+                    pasteClipboard(false);
                     break;
             }
         }
@@ -445,26 +416,14 @@ function attachKeyListener(element) {
                     }
                     break;
                 case '0':
-                    //need to add if(at beginning of line) do nothing
-                    if (isMacOS()) {
-                        simulateKeyPress('ArrowUp',false,true);
-                    }
-                    else {
-                        performAction('ArrowUp', true);
-                    }
+                    moveToLineBoundary(false);
                     break;
                 case '$':
                     //end of line
-                    if (isMacOS()) {
-                        simulateKeyPress('ArrowDown',false,true);
-                    }
-                    else {
-                        performAction('ArrowDown', true);
-                    }
+                    moveToLineBoundary(true);
                     break;
                 case 'g':
-                    //there's a small bug where if you do "Gg" it will go to the beginning of the document when it's not supposed to
-                    if (lastKeyPressed === 'g') {
+                    if (previousKey === 'g') {
                         if (isMacOS()) {
                             isCmdHeld = true;
                             simulateKeyPress('ArrowUp');
@@ -478,13 +437,11 @@ function attachKeyListener(element) {
                     }
                     break;
                 case 'd':
-                    simulateKeyPress('Backspace');
                 case 'c':
+                    simulateKeyPress('Backspace');
+                    modeProxy.currentMode = event.key === 'c' ? MODES.INSERT : MODES.NORMAL;
+                    break;
                 default:
-                    if (deletionPending || replacementPending) {
-                        event.stopPropagation();
-                        event.preventDefault();
-                    }
                     break;
                 case 'G':
                     if (isMacOS()) {
@@ -496,21 +453,7 @@ function attachKeyListener(element) {
                     simulateKeyPress('End', true);
                     break;
                 case 'y':
-                    if (iframe && iframe.contentDocument) {
-                        try {
-                            const success = iframe.contentDocument.execCommand('copy');
-                            if (success) {
-                                console.log('Content copied to clipboard from VISUAL mode');
-                            } else {
-                                console.warn('Copy command was not successful in VISUAL mode. Ensure text is selected.');
-                            }
-                        } catch (err) {
-                            console.error('Failed to execute copy command in VISUAL mode:', err);
-                        }
-                    } else {
-                        console.warn('Iframe or contentDocument not found for copy operation in VISUAL mode.');
-                    }
-                    modeProxy.currentMode = MODES.NORMAL;
+                    yankSelection();
                     break;
             }
         }
@@ -518,57 +461,24 @@ function attachKeyListener(element) {
             event.preventDefault();
             switch (event.key) {
                 case 'j':
-                    simulateKeyPress('ArrowDown');
-                    break;
                 case 'k':
-                    // isShiftHeld is true because we are in VISUAL_LINE mode.
-                    if (isMacOS()) {
-                        // Simulate Cmd+ArrowLeft to go to the beginning of the current visual line.
-                        // Note: The existing '0' command uses simulateKeyPress('ArrowUp', false, true) for macOS,
-                        // which might be "go to top of paragraph/document". We need true "start of line".
-                        // Let's assume for now that 'ArrowLeft' with Cmd is the correct "start of line" for selection purposes.
-                        // If textTarget.dispatchKeyEvent for 'moveFocusToStartOfLine' or similar exists, that'd be better,
-                        // but we're using existing simulateKeyPress.
-                        // We need to ensure 'ArrowLeft' with Cmd is what we want for "start of visual line".
-                        // The existing '0' command for macOS is: simulateKeyPress('ArrowUp', false, true);
-                        // The existing '$' command for macOS is: simulateKeyPress('ArrowDown', false, true);
-                        // These might be more like "go to start/end of paragraph/block" rather than visual line.
-                        // Let's try to use the Mac standard "Command + Left Arrow" for start of line.
-                        // This means we need to set isCmdHeld = true temporarily.
-
-                        isCmdHeld = true;
-                        simulateKeyPress('ArrowLeft'); // Cmd+ArrowLeft
-                        isCmdHeld = false;
-                        
-                        simulateKeyPress('ArrowUp');   // Shift+ArrowUp (isShiftHeld is true globally for VISUAL_LINE)
-                    } else {
-                        simulateKeyPress('Home');      // Home key for non-MacOS (go to start of line)
-                        simulateKeyPress('ArrowUp');   // Shift+ArrowUp
-                    }
+                    moveVisualLine(event.key === 'j' ? 1 : -1);
                     break;
                 case 'y':
-                    if (iframe && iframe.contentDocument) {
-                        try {
-                            const success = iframe.contentDocument.execCommand('copy');
-                            if (success) {
-                                console.log('Content copied to clipboard');
-                            } else {
-                                console.warn('Copy command was not successful. Ensure text is selected.');
-                            }
-                        } catch (err) {
-                            console.error('Failed to execute copy command:', err);
-                        }
-                    } else {
-                        console.warn('Iframe or contentDocument not found for copy operation.');
-                    }
-                    modeProxy.currentMode = MODES.NORMAL;
+                    if (visualLine?.selected) yankSelection();
+                    else clipboardStatus('Empty line; clipboard unchanged');
+                    break;
+                case 'd':
+                case 'c':
+                    deleteVisualLines(event.key === 'c');
                     break;
                 case 'Escape':
-                    isShiftHeld = false; // Crucial: do this *before* simulating keys
-                    // Simulate a slight cursor movement to ensure selection is cleared.
-                    // ArrowLeft might be safer if we want to stay on the same line, near the start.
-                    simulateKeyPress('ArrowLeft'); 
+                    collapseVisualLines();
+                    // The native range always points forward; restore the
+                    // active line when it is below the original V anchor.
+                    for (let i = 0; i < Math.max(visualLine?.extent || 0, 0); i++) stepVisualLine(1);
                     modeProxy.currentMode = MODES.NORMAL;
+                    visualLine = null;
                     break;
                 default:
                     break;
@@ -601,7 +511,7 @@ const KEY_CODES = {
 function simulateKeyPress(keyval, ctrlval = false, optionval = false) {
     const target = getTextTarget();
     if (target) {
-        const keyCode = KEY_CODES[keyval] || keyval.keyCode;
+        const keyCode = KEY_CODES[keyval] || (keyval.length === 1 ? keyval.toUpperCase().charCodeAt(0) : 0);
         const simulatedEvent = new KeyboardEvent('keydown', {
             key: keyval,
             keyCode: keyCode,  // KeyCode for 'Home' key
@@ -613,7 +523,12 @@ function simulateKeyPress(keyval, ctrlval = false, optionval = false) {
             bubbles: true,
             cancelable: true
         });
-        target.dispatchEvent(simulatedEvent);
+        dispatchingKey = true;
+        try {
+            target.dispatchEvent(simulatedEvent);
+        } finally {
+            dispatchingKey = false;
+        }
     }
 }
 function performAction(key, ctrlval = false) {
@@ -636,22 +551,393 @@ function simulateCharacter(letter) {
             bubbles: true,
             cancelable: true
         });
-        target.dispatchEvent(simulatedEvent);
+        dispatchingKey = true;
+        try {
+            target.dispatchEvent(simulatedEvent);
+        } finally {
+            dispatchingKey = false;
+        }
     }
 }
 
-function isAtEndOfLine() {
-    const selection = window.getSelection();
-    if (!selection.rangeCount) return false;
+// Keep selection modifiers explicit when invoking native Docs navigation.
+function moveToLineBoundary(end) {
+    // Docs handles Home/End on both platforms. Cmd/Option+arrows can cross
+    // a paragraph boundary when the caret is already at its start or end.
+    simulateKeyPress(end ? 'End' : 'Home');
+}
 
-    const range = selection.getRangeAt(0);
-    if (!range.collapsed) return false; // Ensure the range is a cursor (collapsed range)
+function caretPosition() {
+    const caret = document.querySelector('.kix-cursor-caret');
+    if (!caret) return null;
+    const rect = caret.getBoundingClientRect();
+    const editor = document.querySelector('.kix-appview-editor');
+    return { x: rect.left + (editor?.scrollLeft || 0), y: rect.top + (editor?.scrollTop || 0) };
+}
 
-    // Create a temporary range to select all content from the cursor to the end of the node
-    const tempRange = range.cloneRange();
-    tempRange.selectNodeContents(range.endContainer);
-    tempRange.setStart(range.endOffset, 0);
+function samePosition(a, b) {
+    return a && b && a.x === b.x && a.y === b.y;
+}
 
-    // Check if the temporary range's content is empty (i.e., cursor is at the end)
-    return tempRange.toString() === '';
+// Keep an inclusive line offset from the line where V began. Native ranges
+// always run forward from the first selected line to the end of the last one.
+// Rebuilding the range lets j/k cross the anchor without dropping that line.
+function beginVisualLine() {
+    if (!caretPosition()) return;
+    isShiftHeld = false;
+    moveToLineBoundary(false);
+    visualLine = { extent: 0, selected: false };
+    modeProxy.currentMode = MODES.VISUAL_LINE;
+    selectVisualLines();
+}
+
+function stepVisualLine(direction) {
+    const before = caretPosition();
+    simulateKeyPress(direction > 0 ? 'ArrowDown' : 'ArrowUp');
+    moveToLineBoundary(false);
+    const after = caretPosition();
+    return before && after && before.y !== after.y;
+}
+
+function collapseVisualLines() {
+    isShiftHeld = false;
+    // ArrowLeft on an empty range would move onto the preceding line.
+    if (visualLine?.selected) simulateKeyPress('ArrowLeft');
+    moveToLineBoundary(false);
+}
+
+function selectVisualLines() {
+    const start = caretPosition();
+    isShiftHeld = true;
+    for (let i = 0; i < Math.abs(visualLine.extent); i++) {
+        simulateKeyPress('ArrowDown');
+    }
+    moveToLineBoundary(true);
+    visualLine.selected = !samePosition(start, caretPosition());
+}
+
+function moveVisualLine(direction) {
+    if (!visualLine || !caretPosition()) return;
+    collapseVisualLines();
+    // The active line is the bottom endpoint for a forward range, the top
+    // endpoint for a backward range. Probe the new endpoint without selecting.
+    for (let i = 0; i < Math.max(visualLine.extent, 0); i++) stepVisualLine(1);
+    if (stepVisualLine(direction)) visualLine.extent += direction;
+    for (let i = 0; i < Math.max(visualLine.extent, 0); i++) stepVisualLine(-1);
+    selectVisualLines();
+}
+
+async function readVisualRange(target) {
+    const data = new DataTransfer();
+    target.dispatchEvent(new ClipboardEvent('copy', {
+        clipboardData: data, bubbles: true, cancelable: true,
+    }));
+    const text = data.getData('text/plain');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    if (!target.isConnected) throw new Error('Editor detached during range read');
+    return text;
+}
+
+async function deleteVisualLines(change) {
+    const target = getTextTarget();
+    if (!visualLine || !caretPosition() || !target) return;
+    if (change) {
+        if (visualLine.selected) simulateKeyPress('Backspace');
+        visualLine = null;
+        modeProxy.currentMode = MODES.INSERT;
+        return;
+    }
+    const transaction = { keys: [] };
+    pendingWordChange = transaction;
+    let failure = false;
+    try {
+        const span = Math.abs(visualLine.extent);
+        collapseVisualLines();
+        for (let i = 0; i < span; i++) stepVisualLine(1);
+        moveToLineBoundary(true);
+        const lineEnd = caretPosition();
+        moveToLineBoundary(false);
+        const emptyLastLine = samePosition(lineEnd, caretPosition());
+        moveToLineBoundary(true);
+        // Probe with a collapsed caret. Docs' hidden caret can stay stationary
+        // when a selection changes, so selection geometry cannot identify EOF.
+        const end = caretPosition();
+        simulateKeyPress('ArrowRight');
+        const atEnd = samePosition(end, caretPosition());
+        let followingBreak = false;
+        if (!atEnd) {
+            simulateKeyPress('ArrowLeft');
+            if (emptyLastLine) {
+                // Docs serializes a selected empty-paragraph break as a space.
+                // Equal collapsed Home/End endpoints identify an empty line;
+                // advancing from it necessarily crosses its paragraph break.
+                followingBreak = true;
+            } else {
+                isShiftHeld = true;
+                simulateKeyPress('ArrowRight');
+                // A lone paragraph break is copied as a space by Docs. Include
+                // a character beyond it so its leading newline survives copy.
+                simulateKeyPress('ArrowRight');
+                const next = await readVisualRange(target);
+                if (!next) throw new Error('Range unavailable');
+                followingBreak = /^[\r\n]/.test(next);
+                isShiftHeld = false;
+                simulateKeyPress('ArrowLeft');
+                if (!followingBreak && /^[ \t]+$/.test(next)) {
+                    // Only one character may remain before an empty final
+                    // paragraph. Its equal Home/End endpoints disambiguate
+                    // the copied placeholder from a real soft-wrap space.
+                    simulateKeyPress('ArrowRight');
+                    moveToLineBoundary(false);
+                    const nextStart = caretPosition();
+                    moveToLineBoundary(true);
+                    followingBreak = samePosition(nextStart, caretPosition());
+                    moveToLineBoundary(false);
+                    simulateKeyPress('ArrowLeft');
+                }
+            }
+        }
+        moveToLineBoundary(false);
+        for (let i = 0; i < span; i++) stepVisualLine(-1);
+        let precedingBreak = false;
+        if (atEnd) {
+            const start = caretPosition();
+            moveToLineBoundary(true);
+            const emptyFirstLine = samePosition(start, caretPosition());
+            moveToLineBoundary(false);
+            simulateKeyPress('ArrowLeft');
+            if (!samePosition(start, caretPosition())) {
+                simulateKeyPress('ArrowRight');
+                if (emptyFirstLine) {
+                    precedingBreak = true;
+                } else {
+                    isShiftHeld = true;
+                    simulateKeyPress('ArrowLeft');
+                    // Preserve the trailing newline in Docs' copy payload.
+                    simulateKeyPress('ArrowLeft');
+                    const previous = await readVisualRange(target);
+                    if (!previous) throw new Error('Range unavailable');
+                    precedingBreak = /[\r\n]$/.test(previous);
+                    isShiftHeld = false;
+                    simulateKeyPress('ArrowRight');
+                    if (!precedingBreak && /^[ \t]+$/.test(previous)) {
+                        simulateKeyPress('ArrowLeft');
+                        moveToLineBoundary(true);
+                        const previousEnd = caretPosition();
+                        moveToLineBoundary(false);
+                        precedingBreak = samePosition(previousEnd, caretPosition());
+                        moveToLineBoundary(true);
+                        simulateKeyPress('ArrowRight');
+                    }
+                }
+            }
+        }
+        if (precedingBreak) simulateKeyPress('ArrowLeft');
+        isShiftHeld = true;
+        if (precedingBreak) simulateKeyPress('ArrowRight');
+        for (let i = 0; i < span; i++) simulateKeyPress('ArrowDown');
+        moveToLineBoundary(true);
+        if (followingBreak) simulateKeyPress('ArrowRight');
+        if (!visualLine.selected && !followingBreak && !precedingBreak) return;
+        isShiftHeld = false;
+        // A paragraph-inclusive range is not a word-only smart deletion.
+        // Replacing it with a character can preserve its final paragraph break
+        // in Docs, leaving an unwanted empty line, so delete it directly.
+        if (!followingBreak && !precedingBreak) simulateCharacter(' ');
+        simulateKeyPress('Backspace');
+        moveToLineBoundary(false);
+    } catch (error) {
+        failure = true;
+        isShiftHeld = false;
+        simulateKeyPress('ArrowLeft');
+    } finally {
+        visualLine = null;
+        modeProxy.currentMode = MODES.NORMAL;
+        if (failure) clipboardStatus('Could not read lines; no text changed');
+        replayBufferedKeys(transaction, target);
+    }
+}
+
+function replayBufferedKeys(transaction, target) {
+    pendingWordChange = null;
+    if (!target.isConnected) return;
+    for (const key of transaction.keys) {
+        const event = new KeyboardEvent('keydown', { ...key, bubbles: true, cancelable: true });
+        target.dispatchEvent(event);
+        if (!event.defaultPrevented && key.key.length === 1 && !key.ctrlKey && !key.metaKey && !key.altKey) {
+            simulateCharacter(key.key);
+        }
+    }
+}
+
+function deleteCharacter() {
+    const start = caretPosition();
+    if (!start) return;
+    isShiftHeld = true;
+    moveToLineBoundary(true);
+    isShiftHeld = false;
+    if (samePosition(start, caretPosition())) {
+        // Docs allows a caret after the final character; Vim's x must not
+        // consume the paragraph break there. Empty lines have nothing to delete.
+        moveToLineBoundary(false);
+        if (samePosition(start, caretPosition())) return;
+        moveToLineBoundary(true);
+        simulateKeyPress('ArrowLeft');
+    } else {
+        simulateKeyPress('ArrowLeft'); // collapse back to the original position
+    }
+    simulateKeyPress('ArrowRight');
+    simulateKeyPress('Backspace');
+}
+
+function deleteToLineEnd() {
+    const start = caretPosition();
+    isShiftHeld = true;
+    moveToLineBoundary(true);
+    isShiftHeld = false;
+    // An empty selection must not turn D into a backward-character deletion.
+    if (start && !samePosition(start, caretPosition())) simulateKeyPress('Backspace');
+}
+
+function deleteLine() {
+    // If the Docs caret is unavailable, don't guess whether navigation moved.
+    // Otherwise a failed boundary probe could delete an unrelated line.
+    if (!caretPosition()) {
+        clipboardStatus('Editor cursor unavailable; try again');
+        return;
+    }
+    moveToLineBoundary(true);
+    const end = caretPosition();
+    simulateKeyPress('ArrowRight');
+    const after = caretPosition();
+    if (samePosition(end, after)) {
+        // No next character: include the preceding break on the final line.
+        moveToLineBoundary(false);
+        simulateKeyPress('ArrowLeft');
+        isShiftHeld = true;
+        if (isMacOS()) {
+            isCmdHeld = true;
+            simulateKeyPress('ArrowDown');
+            isCmdHeld = false;
+        } else {
+            simulateKeyPress('End', true);
+        }
+    } else {
+        simulateKeyPress('ArrowLeft');
+        moveToLineBoundary(false);
+        isShiftHeld = true;
+        moveToLineBoundary(true);
+        simulateKeyPress('ArrowRight');
+    }
+    isShiftHeld = false;
+    simulateKeyPress('Backspace');
+    moveToLineBoundary(false);
+}
+
+function clipboardStatus(message) {
+    const indicator = document.getElementById('vim-mode-indicator');
+    if (indicator) indicator.textContent = `${modeProxy.currentMode} — ${message}`;
+}
+
+function yankSelection() {
+    const target = getTextTarget();
+    if (!target) return;
+    try {
+        // Let Docs supply its selected text/HTML to the browser's real clipboard.
+        // The hidden input's DOM selection is only a placeholder, not document text.
+        const copied = target.ownerDocument.execCommand('copy');
+        if (!copied) {
+            clipboardStatus('Copy failed; use Cmd/Ctrl+C');
+            return;
+        }
+        // Docs temporarily fills its hidden input during copy, then restores
+        // the editor selection on a timer. Buffer follow-up commands until
+        // restoration finishes so they cannot edit the old Visual selection.
+        const transaction = { keys: [] };
+        pendingWordChange = transaction;
+        setTimeout(() => {
+            try {
+                isShiftHeld = false;
+                simulateKeyPress('ArrowLeft');
+                visualLine = null;
+                modeProxy.currentMode = MODES.NORMAL;
+                clipboardStatus('Copied');
+            } finally {
+                replayBufferedKeys(transaction, target);
+            }
+        }, 0);
+    } catch (error) {
+        clipboardStatus('Copy failed; use Cmd/Ctrl+C');
+    }
+}
+
+async function pasteClipboard(after) {
+    const target = getTextTarget();
+    if (!target) return;
+    try {
+        const text = await navigator.clipboard.readText();
+        if (!text) return;
+        if (after) simulateKeyPress('ArrowRight');
+        const data = new DataTransfer();
+        data.setData('text/plain', text);
+        target.dispatchEvent(new ClipboardEvent('paste', {
+            clipboardData: data,
+            bubbles: true,
+            cancelable: true,
+        }));
+    } catch (error) {
+        clipboardStatus('Paste failed; use Cmd/Ctrl+V');
+    }
+}
+
+function changeWord() {
+    const target = getTextTarget();
+    const start = caretPosition();
+    if (!target || !start) return;
+    isShiftHeld = true;
+    simulateKeyPress('ArrowRight', !isMacOS(), isMacOS());
+    isShiftHeld = false;
+    if (samePosition(start, caretPosition())) {
+        modeProxy.currentMode = MODES.INSERT;
+        return;
+    }
+
+    // Ask Docs for this range using an in-memory copy event. Unlike execCommand
+    // or navigator.clipboard, this does not read or overwrite the OS clipboard.
+    const data = new DataTransfer();
+    const transaction = { keys: [] };
+    pendingWordChange = transaction;
+    target.dispatchEvent(new ClipboardEvent('copy', {
+        clipboardData: data, bubbles: true, cancelable: true,
+    }));
+    const selected = data.getData('text/plain');
+    // cw changes the remaining keyword/punctuation run, or just the whitespace
+    // when starting on blanks. It must never consume the following word/break.
+    const prefix = selected.match(/^[^\S\r\n]+|^[\p{L}\p{N}\p{M}_]+|^[^\p{L}\p{N}\p{M}_\s]+/u)?.[0] || '';
+
+    // Docs restores its temporary copy selection on a timer. Finish after that,
+    // and replay rapid follow-up input so cw<Escape> and cwTEXT stay ordered.
+    setTimeout(() => {
+        if (selected) {
+            if (prefix) {
+                isShiftHeld = true;
+                const tail = selected.slice(prefix.length);
+                const characters = new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(tail);
+                for (const ignored of characters) simulateKeyPress('ArrowLeft');
+                isShiftHeld = false;
+                // Backspace on a selected word invokes Docs' smart deletion,
+                // which also removes the neighboring space. Replace the range
+                // first, then remove only the single temporary character.
+                simulateCharacter(' ');
+                simulateKeyPress('Backspace');
+            } else {
+                simulateKeyPress('ArrowLeft');
+            }
+            modeProxy.currentMode = MODES.INSERT;
+        } else {
+            simulateKeyPress('ArrowLeft');
+            clipboardStatus('Could not read word; no text changed');
+        }
+        replayBufferedKeys(transaction, target);
+    }, 0);
 }

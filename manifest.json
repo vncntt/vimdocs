@@ -3,7 +3,7 @@
   "name": "Vim for GDocs",
   "version": "1.0",
   "description": "Vim keybindings for Google Docs",
-  "permissions": ["activeTab", "storage"],
+  "permissions": ["activeTab", "storage", "clipboardRead", "clipboardWrite"],
   "content_scripts": [
     {
       "matches": ["*://docs.google.com/document/*"],
