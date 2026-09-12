@@ -35,6 +35,8 @@ Click "Load unpacked" on the top left, navigate to where you put the folder and 
 - [x] o - open new line below current line
 - [x] O - open new line above current line
 
+In insert mode, `jk` returns to normal mode. A lone `j` waits up to 1 second.
+
 ## Change
 
 - [x] cw - change word (keeps the space after it)

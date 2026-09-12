@@ -150,3 +150,15 @@ V k d on paragraphs 2–3 produced exactly the same `one`/`four` output as a fre
 two-paragraph document. Deleting the empty middle paragraph left `one`/`three`
 adjacent. Paragraph-inclusive deletion uses Backspace directly because typing
 replacement text can preserve the final selected paragraph break in Docs.
+
+## Insert-mode jk shortcut
+
+Only the `inoremap jk <Esc>` behavior is added; no vimrc parser. The first j is
+buffered for at most one second. Other keys, native edits, composition, and
+focus changes flush it before proceeding.
+
+Six regression scenarios run in both simulated platforms: matching jk, timeout
+and ordinary text, Escape/cursor movement, modifiers, blur/paste/composition,
+and buffered cw followed by jk. The full simulated suite passes. Live Mac Docs
+checks confirmed quick jk exits without insertion, delayed k stays literal,
+ordinary jx/j+Escape text is preserved, and cursor movement cancels the chord.

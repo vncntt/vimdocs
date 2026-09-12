@@ -94,6 +94,7 @@ function editor(initial, cursor = 0, platform = 'Mac') {
         },
     };
     const innerDocument = {
+        addEventListener() {},
         querySelector() { return target; },
         execCommand(command) {
             if (command === 'copy') {
@@ -111,6 +112,7 @@ function editor(initial, cursor = 0, platform = 'Mac') {
     };
     target.ownerDocument = innerDocument;
     const document = {
+        addEventListener() {},
         querySelector(selector) {
             if (selector.includes('iframe')) return { contentDocument: innerDocument };
             if (selector === '.kix-appview-editor') return { scrollLeft: 0, scrollTop: 0 };
@@ -518,5 +520,42 @@ for (const platform of ['Mac', 'Windows']) {
         assert.equal(e.model.text, 'one\nfour');
         assert.equal(e.model.clipboard, 'untouched');
         assert.equal(e.mode(), 'NORMAL');
+    });
+}
+
+for (const platform of ['Mac', 'Windows']) {
+    test(`${platform}: Insert jk exits without inserting either character`, () => {
+        const e = editor('alpha', 2, platform); e.keys('i', 'j', 'k'); e.flush();
+        assert.equal(e.model.text, 'alpha'); assert.equal(e.model.cursor, 2);
+        assert.equal(e.mode(), 'NORMAL');
+    });
+    test(`${platform}: Insert j flushes on timeout and unrelated input`, () => {
+        const e = editor('', 0, platform); e.keys('i', 'j'); e.flush(); e.key('k');
+        assert.equal(e.model.text, 'jk'); assert.equal(e.mode(), 'INSERT');
+        const f = editor('', 0, platform); f.keys('i', 'j', 'x', 'j', 'j', 'k'); f.flush();
+        assert.equal(f.model.text, 'jxj'); assert.equal(f.mode(), 'NORMAL');
+    });
+    test(`${platform}: Escape and cursor motion do not swallow a pending j`, () => {
+        const e = editor('ab', 1, platform); e.keys('i', 'j', 'Escape'); e.flush();
+        assert.equal(e.model.text, 'ajb'); assert.equal(e.mode(), 'NORMAL');
+        const f = editor('ab', 1, platform); f.keys('i', 'j', 'ArrowLeft', 'k'); f.flush();
+        assert.equal(f.model.text, 'akjb'); assert.equal(f.mode(), 'INSERT');
+    });
+    test(`${platform}: modified k does not trigger the Insert escape mapping`, () => {
+        const e = editor('', 0, platform); e.keys('i', 'j'); e.key('k', { metaKey: true }); e.flush();
+        assert.equal(e.model.text, 'j'); assert.equal(e.mode(), 'INSERT');
+    });
+    test(`${platform}: pending j flushes before blur, paste, and composition`, () => {
+        for (const type of ['blur', 'paste', 'compositionstart']) {
+            const e = editor('', 0, platform); e.keys('i', 'j');
+            e.target.dispatchEvent({ type, clipboardData: { getData: () => 'PASTE' } });
+            e.key('k'); e.flush();
+            assert.equal(e.model.text, type === 'paste' ? 'jPASTEk' : 'jk');
+            assert.equal(e.mode(), 'INSERT');
+        }
+    });
+    test(`${platform}: buffered cw input can finish with jk`, () => {
+        const e = editor('alpha beta', 0, platform); e.keys('c', 'w', 'X', 'j', 'k'); e.flush();
+        assert.equal(e.model.text, 'X beta'); assert.equal(e.mode(), 'NORMAL');
     });
 }
