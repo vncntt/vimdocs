@@ -122,10 +122,55 @@ let replacementPending = false;
 let deletionPending = false;
 let insideDeletion = false;
 
+// Only the user's Insert-mode jk mapping is supported, not a vimrc parser.
+const INSERT_ESCAPE_TIMEOUT_MS = 1000;
+let pendingInsertJ = null;
+
+function flushInsertJ() {
+    const pending = pendingInsertJ;
+    pendingInsertJ = null;
+    if (pending?.target.isConnected && pending.target === getTextTarget()) {
+        simulateCharacter('j');
+    }
+}
+
+function handleInsertEscape(event, target) {
+    if (pendingInsertJ) {
+        const matches = modeProxy.currentMode === MODES.INSERT &&
+            event.key === 'k' && !event.ctrlKey && !event.metaKey &&
+            !event.altKey && !event.shiftKey && !event.isComposing &&
+            Date.now() - pendingInsertJ.started < INSERT_ESCAPE_TIMEOUT_MS;
+        if (matches) {
+            pendingInsertJ = null;
+            event.preventDefault();
+            modeProxy.currentMode = MODES.NORMAL;
+            return true;
+        }
+        flushInsertJ();
+    }
+    if (modeProxy.currentMode !== MODES.INSERT || event.key !== 'j' ||
+        event.ctrlKey || event.metaKey || event.altKey || event.shiftKey ||
+        event.isComposing) return false;
+    event.preventDefault();
+    const pending = { target, started: Date.now() };
+    pendingInsertJ = pending;
+    setTimeout(() => {
+        if (pendingInsertJ === pending) flushInsertJ();
+    }, INSERT_ESCAPE_TIMEOUT_MS);
+    return true;
+}
+
 function attachKeyListener(element) {
+    // Flush before native edits or a click moves the insertion point.
+    for (const type of ['blur', 'paste', 'cut', 'drop', 'compositionstart']) {
+        element.addEventListener(type, flushInsertJ);
+    }
+    document.addEventListener('pointerdown', flushInsertJ, true);
+    element.ownerDocument.addEventListener('pointerdown', flushInsertJ, true);
     element.addEventListener('keydown', (event) => {
         // Native editing events must reach Docs without being parsed as Vim commands.
-        if (dispatchingKey || event.isComposing) return;
+        if (dispatchingKey) return;
+        if (event.isComposing) { flushInsertJ(); return; }
         if (pendingWordChange) {
             event.preventDefault();
             event.stopPropagation();
@@ -133,6 +178,7 @@ function attachKeyListener(element) {
                 metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey });
             return;
         }
+        if (handleInsertEscape(event, element)) return;
         if (event.ctrlKey || event.metaKey || event.altKey) {
             lastKeyPressed = null;
             // Link dialogs collapse Docs' selection on apply. Hand control back
